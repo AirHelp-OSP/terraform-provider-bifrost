@@ -6,7 +6,7 @@ import (
 	"log"
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
-	"github.com/maximhq/terraform-provider-bifrost/internal/provider"
+	"github.com/airhelp-osp/terraform-provider-bifrost/internal/provider"
 )
 
 // Format example HCL/sh files and regenerate registry docs from schema descriptions.
@@ -21,7 +21,7 @@ func main() {
 	flag.Parse()
 
 	opts := providerserver.ServeOpts{
-		Address: "registry.terraform.io/maximhq/bifrost",
+		Address: "registry.terraform.io/airhelp-osp/bifrost",
 		Debug:   debug,
 	}
 

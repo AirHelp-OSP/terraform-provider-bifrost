@@ -14,7 +14,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 
-	bifrostclient "github.com/maximhq/terraform-provider-bifrost/internal/client"
+	bifrostclient "github.com/airhelp-osp/terraform-provider-bifrost/internal/client"
 )
 
 var _ resource.Resource = &VirtualKeyResource{}

@@ -23,7 +23,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"github.com/maximhq/bifrost/core/schemas"
 
-	bifrostclient "github.com/maximhq/terraform-provider-bifrost/internal/client"
+	bifrostclient "github.com/airhelp-osp/terraform-provider-bifrost/internal/client"
 )
 
 var _ resource.Resource = &ProviderResource{}

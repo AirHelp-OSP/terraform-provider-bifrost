@@ -1,4 +1,4 @@
-module github.com/maximhq/terraform-provider-bifrost
+module github.com/airhelp-osp/terraform-provider-bifrost
 
 go 1.26.1
 

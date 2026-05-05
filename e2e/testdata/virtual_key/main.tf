@@ -1,7 +1,7 @@
 terraform {
   required_providers {
     bifrost = {
-      source = "registry.terraform.io/maximhq/bifrost"
+      source = "registry.terraform.io/airhelp-osp/bifrost"
     }
   }
 }

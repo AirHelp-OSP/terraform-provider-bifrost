@@ -1,6 +1,9 @@
 # terraform-provider-bifrost
 
-Terraform provider for [Bifrost](https://github.com/maximhq/bifrost) — the AI/LLM gateway by maximhq.
+> [!NOTE]
+> **Bifrost** is a product of [MaximAI](https://github.com/maximhq).
+
+Terraform provider for [Bifrost](https://github.com/maximhq/bifrost) — the AI/LLM gateway by MaximAI.
 
 ## Resource Coverage
 
@@ -49,7 +52,7 @@ go test ./internal/...   # plugin-testing acceptance suite (no network)
 
 Releases are cut by pushing an annotated `vX.Y.Z` tag. The `.github/workflows/release.yml` workflow runs [GoReleaser](https://goreleaser.com/) which builds for `darwin/linux/windows/freebsd × amd64/386/arm/arm64`, GPG-signs the checksum file, attaches the registry manifest, and creates a GitHub Release. Required repo secrets:
 
-- `GPG_PRIVATE_KEY` — armored ASCII; the public half must be registered on the `maximhq` Terraform Registry namespace.
+- `GPG_PRIVATE_KEY` — armored ASCII; the public half must be registered on the `airhelp-osp` Terraform Registry namespace.
 - `PASSPHRASE` — passphrase for that key.
 
 Process:

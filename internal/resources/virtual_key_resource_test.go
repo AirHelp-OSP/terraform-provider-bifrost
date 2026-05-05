@@ -6,7 +6,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 
-	"github.com/maximhq/terraform-provider-bifrost/internal/provider"
+	"github.com/airhelp-osp/terraform-provider-bifrost/internal/provider"
 )
 
 // TestAccVirtualKey_ConflictingAttributes verifies that the resource-level

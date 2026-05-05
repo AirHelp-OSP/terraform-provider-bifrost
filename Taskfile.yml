@@ -2,7 +2,7 @@ version: '3'
 
 vars:
   HOSTNAME: registry.terraform.io
-  NAMESPACE: maximhq
+  NAMESPACE: airhelp-osp
   NAME: bifrost
   BINARY: terraform-provider-{{.NAME}}
   VERSION: 0.1.0

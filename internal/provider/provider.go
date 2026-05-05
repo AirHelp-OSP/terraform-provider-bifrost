@@ -13,8 +13,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
-	bifrostclient "github.com/maximhq/terraform-provider-bifrost/internal/client"
-	"github.com/maximhq/terraform-provider-bifrost/internal/resources"
+	bifrostclient "github.com/airhelp-osp/terraform-provider-bifrost/internal/client"
+	"github.com/airhelp-osp/terraform-provider-bifrost/internal/resources"
 )
 
 // Ensure BifrostProvider satisfies the provider.Provider interface.
