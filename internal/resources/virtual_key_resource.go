@@ -396,12 +396,14 @@ func vkModelToUpdateRequest(m VirtualKeyResourceModel) bifrostclient.UpdateVirtu
 		req.IsActive = &v
 	}
 
-	// Always send team_id and customer_id (nil clears both).
-	if !m.TeamID.IsNull() && !m.TeamID.IsUnknown() && m.TeamID.ValueString() != "" {
+	// team_id and customer_id are always sent so a removed config attribute
+	// becomes a JSON null on the wire, which Bifrost treats as an explicit
+	// clear. Unknown values are skipped (treated like absent).
+	if !m.TeamID.IsUnknown() && !m.TeamID.IsNull() && m.TeamID.ValueString() != "" {
 		v := m.TeamID.ValueString()
 		req.TeamID = &v
 	}
-	if !m.CustomerID.IsNull() && !m.CustomerID.IsUnknown() && m.CustomerID.ValueString() != "" {
+	if !m.CustomerID.IsUnknown() && !m.CustomerID.IsNull() && m.CustomerID.ValueString() != "" {
 		v := m.CustomerID.ValueString()
 		req.CustomerID = &v
 	}
@@ -537,7 +539,7 @@ func vkResponseToModel(apiResp *bifrostclient.VirtualKeyResponse, prior *Virtual
 	}
 	for _, pc := range apiResp.ProviderConfigs {
 		priorPC := priorPCByProvider[pc.Provider]
-		m.ProviderConfigs = append(m.ProviderConfigs, apiRespToVKProviderConfigModel(pc, priorPC.Budget))
+		m.ProviderConfigs = append(m.ProviderConfigs, apiRespToVKProviderConfigModel(pc, priorPC))
 	}
 
 	return m
@@ -586,9 +588,13 @@ func apiRespToRateLimitModel(rl *bifrostclient.VKRateLimit) *VKRateLimitModel {
 	return m
 }
 
-func apiRespToVKProviderConfigModel(pc bifrostclient.VKProviderConfigResponse, priorBudget *VKBudgetModel) VKProviderConfigModel {
+// apiRespToVKProviderConfigModel maps an API provider-config entry into TF state.
+// key_ids are not returned by Bifrost, so they are preserved from prior state to
+// avoid perpetual drift.
+func apiRespToVKProviderConfigModel(pc bifrostclient.VKProviderConfigResponse, prior VKProviderConfigModel) VKProviderConfigModel {
 	m := VKProviderConfigModel{
 		Provider: types.StringValue(pc.Provider),
+		KeyIDs:   prior.KeyIDs,
 	}
 	if pc.Weight != nil {
 		m.Weight = types.Float64Value(*pc.Weight)
@@ -596,7 +602,7 @@ func apiRespToVKProviderConfigModel(pc bifrostclient.VKProviderConfigResponse, p
 	for _, am := range pc.AllowedModels {
 		m.AllowedModels = append(m.AllowedModels, types.StringValue(am))
 	}
-	m.Budget = apiRespToBudgetModel(pc.Budget, priorBudget)
+	m.Budget = apiRespToBudgetModel(pc.Budget, prior.Budget)
 	m.RateLimit = apiRespToRateLimitModel(pc.RateLimit)
 	return m
 }

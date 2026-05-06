@@ -278,12 +278,16 @@ type CreateVirtualKeyRequest struct {
 // UpdateVirtualKeyRequest is the payload for PUT /api/governance/virtual-keys/{id}.
 // All provider configs are sent without IDs (nil ID = new), which causes Bifrost to
 // delete all existing configs and recreate them — a full replacement.
+//
+// team_id and customer_id intentionally lack omitempty: a nil pointer marshals
+// to JSON null, which Bifrost treats as an explicit clear of any existing
+// association. Omitting them would leave a previous value in place.
 type UpdateVirtualKeyRequest struct {
 	Name            *string                  `json:"name,omitempty"`
 	Description     *string                  `json:"description,omitempty"`
 	ProviderConfigs []VKProviderConfigCreate `json:"provider_configs,omitempty"`
-	TeamID          *string                  `json:"team_id,omitempty"`
-	CustomerID      *string                  `json:"customer_id,omitempty"`
+	TeamID          *string                  `json:"team_id"`
+	CustomerID      *string                  `json:"customer_id"`
 	Budget          *VKUpdateBudget          `json:"budget,omitempty"`
 	RateLimit       *VKRateLimit             `json:"rate_limit,omitempty"`
 	IsActive        *bool                    `json:"is_active,omitempty"`

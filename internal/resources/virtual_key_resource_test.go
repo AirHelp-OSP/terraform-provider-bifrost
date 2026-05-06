@@ -37,8 +37,9 @@ resource "bifrost_virtual_key" "test" {
 	})
 }
 
-// TestAccVirtualKey_ProxyTypeValidator verifies that the OneOf validator on
-// proxy_config.type rejects an unknown proxy type before reaching the API.
+// TestAccProvider_ProxyTypeValidator verifies that the OneOf validator on
+// bifrost_provider.proxy_config.type rejects an unknown proxy type before
+// reaching the API.
 func TestAccProvider_ProxyTypeValidator(t *testing.T) {
 	resource.UnitTest(t, resource.TestCase{
 		ProtoV6ProviderFactories: provider.ProtoV6ProviderFactories(),

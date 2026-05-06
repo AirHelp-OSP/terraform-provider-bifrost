@@ -60,4 +60,4 @@ Process:
 1. Update `CHANGELOG.md` (move `[Unreleased]` items under a new version heading).
 2. Commit and push to `master`.
 3. Tag: `git tag -a vX.Y.Z -m "vX.Y.Z"` then `git push --tags`.
-4. Watch the `release` workflow finish, then publish the version on the [Terraform Registry](https://registry.terraform.io/providers/maximhq/bifrost).
+4. Watch the `release` workflow finish, then publish the version on the [Terraform Registry](https://registry.terraform.io/providers/airhelp-osp/bifrost).

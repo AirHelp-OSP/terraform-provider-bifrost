@@ -28,6 +28,7 @@ import (
 
 var _ resource.Resource = &ProviderResource{}
 var _ resource.ResourceWithImportState = &ProviderResource{}
+var _ resource.ResourceWithConfigValidators = &ProviderResource{}
 
 // NewProviderResource returns a new ProviderResource.
 func NewProviderResource() resource.Resource {
@@ -393,6 +394,51 @@ func (r *ProviderResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 }
 
 // ── CRUD ──────────────────────────────────────────────────────────────────────
+
+// bufferSizeAtLeastConcurrencyValidator enforces the schema-documented invariant
+// that buffer_size >= concurrency when the user supplies both values. When
+// either is left unset, framework defaults satisfy the relationship.
+type bufferSizeAtLeastConcurrencyValidator struct{}
+
+func (bufferSizeAtLeastConcurrencyValidator) Description(_ context.Context) string {
+	return "concurrency_and_buffer_size.buffer_size must be >= concurrency_and_buffer_size.concurrency"
+}
+
+func (v bufferSizeAtLeastConcurrencyValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (bufferSizeAtLeastConcurrencyValidator) ValidateResource(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var model ProviderResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &model)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	cb := model.ConcurrencyAndBufferSize
+	if cb == nil {
+		return
+	}
+	if cb.Concurrency.IsNull() || cb.Concurrency.IsUnknown() {
+		return
+	}
+	if cb.BufferSize.IsNull() || cb.BufferSize.IsUnknown() {
+		return
+	}
+	if cb.BufferSize.ValueInt64() < cb.Concurrency.ValueInt64() {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("concurrency_and_buffer_size").AtName("buffer_size"),
+			"Invalid buffer_size",
+			fmt.Sprintf("buffer_size (%d) must be >= concurrency (%d).",
+				cb.BufferSize.ValueInt64(), cb.Concurrency.ValueInt64()),
+		)
+	}
+}
+
+func (r *ProviderResource) ConfigValidators(_ context.Context) []resource.ConfigValidator {
+	return []resource.ConfigValidator{
+		bufferSizeAtLeastConcurrencyValidator{},
+	}
+}
 
 func (r *ProviderResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {

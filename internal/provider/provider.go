@@ -55,7 +55,7 @@ func (p *BifrostProvider) Schema(_ context.Context, _ provider.SchemaRequest, re
 				MarkdownDescription: "Bifrost API base URL (e.g. `http://bifrost.internal:8080`). " +
 					"May also be set via the `BIFROST_ENDPOINT` environment variable.",
 				Description: "Bifrost API base URL. May also be set via BIFROST_ENDPOINT environment variable.",
-				Required:    true,
+				Optional:    true,
 			},
 			"username": schema.StringAttribute{
 				MarkdownDescription: "Basic-auth username for the Bifrost admin API. " +
