@@ -119,6 +119,10 @@ Optional:
 - `models` (List of String) Models this key may access. Use `[""]` for all models. Defaults to `[""]`.
 - `weight` (Number) Load-balancing weight (relative to other keys for this provider). Defaults to `1.0`.
 
+Read-Only:
+
+- `id` (String) Bifrost-assigned key identifier. Required by the API to match existing keys on Update; tracked in state automatically.
+
 <a id="nestedatt--keys--bedrock_key_config"></a>
 ### Nested Schema for `keys.bedrock_key_config`
 

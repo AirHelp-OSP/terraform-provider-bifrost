@@ -56,6 +56,7 @@ type ProviderResourceModel struct {
 }
 
 type KeyModel struct {
+	ID               types.String           `tfsdk:"id"`
 	Name             types.String           `tfsdk:"name"`
 	Value            types.String           `tfsdk:"value"`
 	Models           types.List             `tfsdk:"models"`
@@ -162,6 +163,15 @@ func (r *ProviderResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				Optional:    true,
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
+						"id": schema.StringAttribute{
+							MarkdownDescription: "Bifrost-assigned key identifier. Required by the API to match existing keys " +
+								"on Update; tracked in state automatically.",
+							Description: "Bifrost-assigned key identifier (computed).",
+							Computed:    true,
+							PlanModifiers: []planmodifier.String{
+								stringplanmodifier.UseStateForUnknown(),
+							},
+						},
 						"name": schema.StringAttribute{
 							MarkdownDescription: "Stable identifier for the key (used to match keys across plans).",
 							Description:         "Stable identifier for the key (used for matching during Read).",
@@ -515,15 +525,16 @@ func (r *ProviderResource) Read(ctx context.Context, req resource.ReadRequest, r
 }
 
 func (r *ProviderResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan ProviderResourceModel
+	var plan, priorState ProviderResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &priorState)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
 	tflog.Debug(ctx, "updating Bifrost provider", map[string]any{"provider_name": plan.ProviderName.ValueString()})
 
-	updateReq, diags := modelToUpdateRequest(ctx, plan)
+	updateReq, diags := modelToUpdateRequest(ctx, plan, &priorState)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -572,7 +583,7 @@ func modelToCreateRequest(ctx context.Context, m ProviderResourceModel) (bifrost
 		Provider: schemas.ModelProvider(m.ProviderName.ValueString()),
 	}
 
-	keys, d := modelKeysToAPI(ctx, m.Keys)
+	keys, d := modelKeysToAPI(ctx, m.Keys, nil)
 	diags.Append(d...)
 	if !diags.HasError() {
 		req.Keys = keys
@@ -608,11 +619,11 @@ func modelToCreateRequest(ctx context.Context, m ProviderResourceModel) (bifrost
 	return req, diags
 }
 
-func modelToUpdateRequest(ctx context.Context, m ProviderResourceModel) (bifrostclient.UpdateProviderRequest, diag.Diagnostics) {
+func modelToUpdateRequest(ctx context.Context, m ProviderResourceModel, prior *ProviderResourceModel) (bifrostclient.UpdateProviderRequest, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	req := bifrostclient.UpdateProviderRequest{}
 
-	keys, d := modelKeysToAPI(ctx, m.Keys)
+	keys, d := modelKeysToAPI(ctx, m.Keys, priorKeyIDsByName(prior))
 	diags.Append(d...)
 	if !diags.HasError() {
 		req.Keys = keys
@@ -650,10 +661,21 @@ func modelToUpdateRequest(ctx context.Context, m ProviderResourceModel) (bifrost
 
 // ── Conversion: API response → model ─────────────────────────────────────────
 
+// hasPriorState reports whether prior was produced by a previous Read/Create/Update.
+// ProviderStatus is computed-only and unconditionally set by responseToModel, so it is
+// IsNull() iff this state was created by ImportStatePassthroughID and has not yet been
+// reconciled with the API. Distinguishing those cases lets the nested-block guards
+// preserve "user did not configure this block" semantics on regular Read while still
+// hydrating state from the API on the post-import Read.
+func hasPriorState(prior *ProviderResourceModel) bool {
+	return prior != nil && !prior.ProviderStatus.IsNull()
+}
+
 // responseToModel converts a ProviderResponse to TF state, preserving sensitive fields
 // from prior when the API returns redacted values. Nested-block presence in state
 // follows the user's original configuration: if `prior.<block>` was nil, state stays
-// nil even when the API returns server-side defaults.
+// nil even when the API returns server-side defaults — except on the post-import Read,
+// where prior is the empty passthrough shape and we hydrate from the API instead.
 func responseToModel(apiResp *bifrostclient.ProviderResponse, prior *ProviderResourceModel) (*ProviderResourceModel, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	m := &ProviderResourceModel{
@@ -681,7 +703,8 @@ func responseToModel(apiResp *bifrostclient.ProviderResponse, prior *ProviderRes
 	}
 
 	// network_config: only populate state if the user configured the block.
-	if prior == nil || prior.NetworkConfig != nil {
+	// On import, prior has no ProviderStatus yet, so hydrate from the API.
+	if !hasPriorState(prior) || prior.NetworkConfig != nil {
 		ncRes := networkConfigToModel(apiResp.NetworkConfig, prior)
 		diags.Append(ncRes.diags...)
 		m.NetworkConfig = ncRes.model
@@ -704,7 +727,8 @@ func responseToModel(apiResp *bifrostclient.ProviderResponse, prior *ProviderRes
 	}
 
 	// concurrency_and_buffer_size: only populate state if the user configured the block.
-	if prior == nil || prior.ConcurrencyAndBufferSize != nil {
+	// On import, prior has no ProviderStatus yet, so hydrate from the API.
+	if !hasPriorState(prior) || prior.ConcurrencyAndBufferSize != nil {
 		cb := apiResp.ConcurrencyAndBufferSize
 		m.ConcurrencyAndBufferSize = &ConcurrencyBufferSizeModel{
 			Concurrency: types.Int64Value(int64(cb.Concurrency)),
@@ -766,6 +790,7 @@ func networkConfigToModel(nc schemas.NetworkConfig, prior *ProviderResourceModel
 func apiKeyToModel(apiKey schemas.Key, prior KeyModel) (KeyModel, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	km := KeyModel{
+		ID:     types.StringValue(apiKey.ID),
 		Name:   types.StringValue(apiKey.Name),
 		Weight: types.Float64Value(apiKey.Weight),
 	}
@@ -860,11 +885,38 @@ func bedrockKeyConfigToModel(bkc *schemas.BedrockKeyConfig, prior *BedrockKeyCon
 	return m, diags
 }
 
-func modelKeysToAPI(ctx context.Context, keys []KeyModel) ([]schemas.Key, diag.Diagnostics) {
+// priorKeyIDsByName builds a name→ID lookup from prior state so Update requests
+// can match existing keys by their stable `name` rather than by list index.
+// `keys` is a ListNestedAttribute, and `UseStateForUnknown()` carries plan-time
+// values by index — reordering keys in config would otherwise misassociate IDs
+// and cause Bifrost to update/duplicate the wrong key.
+func priorKeyIDsByName(prior *ProviderResourceModel) map[string]string {
+	if prior == nil {
+		return nil
+	}
+	m := make(map[string]string, len(prior.Keys))
+	for _, k := range prior.Keys {
+		if id := k.ID.ValueString(); id != "" {
+			m[k.Name.ValueString()] = id
+		}
+	}
+	return m
+}
+
+func modelKeysToAPI(ctx context.Context, keys []KeyModel, priorIDsByName map[string]string) ([]schemas.Key, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	result := make([]schemas.Key, 0, len(keys))
 	for _, km := range keys {
+		// On Update, prefer the prior state's ID matched by name. The plan's
+		// `id` is carried by UseStateForUnknown by list index, which is wrong
+		// when the user reorders keys. On Create, priorIDsByName is nil and
+		// km.ID is unknown ⇒ empty string, so the server assigns the ID.
+		id := km.ID.ValueString()
+		if priorID, ok := priorIDsByName[km.Name.ValueString()]; ok {
+			id = priorID
+		}
 		k := schemas.Key{
+			ID:     id,
 			Name:   km.Name.ValueString(),
 			Value:  *schemas.NewEnvVar(km.Value.ValueString()),
 			Weight: km.Weight.ValueFloat64(),
