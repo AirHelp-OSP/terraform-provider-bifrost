@@ -525,15 +525,16 @@ func (r *ProviderResource) Read(ctx context.Context, req resource.ReadRequest, r
 }
 
 func (r *ProviderResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan ProviderResourceModel
+	var plan, priorState ProviderResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &priorState)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
 	tflog.Debug(ctx, "updating Bifrost provider", map[string]any{"provider_name": plan.ProviderName.ValueString()})
 
-	updateReq, diags := modelToUpdateRequest(ctx, plan)
+	updateReq, diags := modelToUpdateRequest(ctx, plan, &priorState)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -582,7 +583,7 @@ func modelToCreateRequest(ctx context.Context, m ProviderResourceModel) (bifrost
 		Provider: schemas.ModelProvider(m.ProviderName.ValueString()),
 	}
 
-	keys, d := modelKeysToAPI(ctx, m.Keys)
+	keys, d := modelKeysToAPI(ctx, m.Keys, nil)
 	diags.Append(d...)
 	if !diags.HasError() {
 		req.Keys = keys
@@ -618,11 +619,11 @@ func modelToCreateRequest(ctx context.Context, m ProviderResourceModel) (bifrost
 	return req, diags
 }
 
-func modelToUpdateRequest(ctx context.Context, m ProviderResourceModel) (bifrostclient.UpdateProviderRequest, diag.Diagnostics) {
+func modelToUpdateRequest(ctx context.Context, m ProviderResourceModel, prior *ProviderResourceModel) (bifrostclient.UpdateProviderRequest, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	req := bifrostclient.UpdateProviderRequest{}
 
-	keys, d := modelKeysToAPI(ctx, m.Keys)
+	keys, d := modelKeysToAPI(ctx, m.Keys, priorKeyIDsByName(prior))
 	diags.Append(d...)
 	if !diags.HasError() {
 		req.Keys = keys
@@ -884,15 +885,38 @@ func bedrockKeyConfigToModel(bkc *schemas.BedrockKeyConfig, prior *BedrockKeyCon
 	return m, diags
 }
 
-func modelKeysToAPI(ctx context.Context, keys []KeyModel) ([]schemas.Key, diag.Diagnostics) {
+// priorKeyIDsByName builds a name→ID lookup from prior state so Update requests
+// can match existing keys by their stable `name` rather than by list index.
+// `keys` is a ListNestedAttribute, and `UseStateForUnknown()` carries plan-time
+// values by index — reordering keys in config would otherwise misassociate IDs
+// and cause Bifrost to update/duplicate the wrong key.
+func priorKeyIDsByName(prior *ProviderResourceModel) map[string]string {
+	if prior == nil {
+		return nil
+	}
+	m := make(map[string]string, len(prior.Keys))
+	for _, k := range prior.Keys {
+		if id := k.ID.ValueString(); id != "" {
+			m[k.Name.ValueString()] = id
+		}
+	}
+	return m
+}
+
+func modelKeysToAPI(ctx context.Context, keys []KeyModel, priorIDsByName map[string]string) ([]schemas.Key, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	result := make([]schemas.Key, 0, len(keys))
 	for _, km := range keys {
-		// ID is round-tripped from prior state via UseStateForUnknown so Bifrost
-		// can match the existing key on Update; on Create it's empty and the
-		// server assigns one, which Read then captures back into state.
+		// On Update, prefer the prior state's ID matched by name. The plan's
+		// `id` is carried by UseStateForUnknown by list index, which is wrong
+		// when the user reorders keys. On Create, priorIDsByName is nil and
+		// km.ID is unknown ⇒ empty string, so the server assigns the ID.
+		id := km.ID.ValueString()
+		if priorID, ok := priorIDsByName[km.Name.ValueString()]; ok {
+			id = priorID
+		}
 		k := schemas.Key{
-			ID:     km.ID.ValueString(),
+			ID:     id,
 			Name:   km.Name.ValueString(),
 			Value:  *schemas.NewEnvVar(km.Value.ValueString()),
 			Weight: km.Weight.ValueFloat64(),
