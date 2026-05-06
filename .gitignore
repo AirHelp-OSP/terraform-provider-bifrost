@@ -1,0 +1,11 @@
+# Compiled provider binary
+terraform-provider-bifrost
+*.exe
+
+# Go build/test artifacts
+*.test
+*.out
+coverage.txt
+
+# Release artifacts
+dist/

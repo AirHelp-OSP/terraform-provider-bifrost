@@ -1,0 +1,56 @@
+version: '3'
+
+vars:
+  HOSTNAME: registry.terraform.io
+  NAMESPACE: airhelp-osp
+  NAME: bifrost
+  BINARY: terraform-provider-{{.NAME}}
+  VERSION: 0.1.0
+  OS_ARCH:
+    sh: echo "$(go env GOOS)_$(go env GOARCH)"
+  INSTALL_PATH: '{{.HOME}}/.terraform.d/plugins/{{.HOSTNAME}}/{{.NAMESPACE}}/{{.NAME}}/{{.VERSION}}/{{.OS_ARCH}}'
+
+tasks:
+  default:
+    cmds:
+      - task: build
+
+  build:
+    cmds:
+      - go build -o {{.BINARY}}
+
+  install:
+    deps: [build]
+    cmds:
+      - mkdir -p {{.INSTALL_PATH}}
+      - mv {{.BINARY}} {{.INSTALL_PATH}}/
+
+  testacc:
+    desc: End-to-end tests. Spins up Bifrost via testcontainers and runs Terratest.
+    cmds:
+      - go test ./e2e/... -v -timeout 15m
+
+  test:
+    desc: Plugin-testing acceptance suite (no network).
+    env:
+      TF_ACC: '1'
+    cmds:
+      - go test -v -timeout 5m ./internal/...
+
+  generate:
+    desc: Regenerate registry docs from schema descriptions.
+    cmds:
+      - go generate ./...
+
+  fmt:
+    cmds:
+      - gofmt -s -w .
+
+  vet:
+    cmds:
+      - go vet ./...
+
+  lint:
+    desc: Run golangci-lint.
+    cmds:
+      - golangci-lint run ./...
