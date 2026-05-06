@@ -9,3 +9,4 @@ coverage.txt
 
 # Release artifacts
 dist/
+api
