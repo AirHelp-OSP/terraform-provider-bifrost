@@ -207,7 +207,10 @@ func (c *BifrostClient) DeleteProvider(ctx context.Context, name string) error {
 // ─── Provider key API ─────────────────────────────────────────────────────────
 //
 // Bifrost v1.5.0 exposes a dedicated per-key API under /api/providers/{provider}/keys.
-// All endpoints take and return a flat schemas.Key body (no envelope).
+// Single-key endpoints (Create/Get/Update/Delete) take and return a flat
+// schemas.Key body. The list endpoint is the only one with an envelope —
+// GET .../keys returns `{"keys": [...], "total": N}` (modeled as
+// listProviderKeysResponse).
 
 // CreateProviderKey calls POST /api/providers/{provider}/keys.
 // Send key.ID empty; Bifrost assigns a UUID and returns it in the response.

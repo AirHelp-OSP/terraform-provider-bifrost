@@ -537,11 +537,13 @@ func vkResponseToModel(apiResp *bifrostclient.VirtualKeyResponse, prior *Virtual
 	}
 
 	var priorBudget *VKBudgetModel
+	var priorRateLimit *VKRateLimitModel
 	if prior != nil {
 		priorBudget = prior.Budget
+		priorRateLimit = prior.RateLimit
 	}
 	m.Budget = apiRespToBudgetModel(apiResp.Budget, priorBudget)
-	m.RateLimit = apiRespToRateLimitModel(apiResp.RateLimit)
+	m.RateLimit = apiRespToRateLimitModel(apiResp.RateLimit, priorRateLimit)
 
 	priorPCByProvider := map[string]VKProviderConfigModel{}
 	if prior != nil {
@@ -557,19 +559,23 @@ func vkResponseToModel(apiResp *bifrostclient.VirtualKeyResponse, prior *Virtual
 	return m
 }
 
-// NOTE (Bifrost v1.5.0 BC6): the migration guide forward-recommends moving from
-// the singular `budget` object to a `budgets` array on both Virtual Keys and
-// their provider configs. The v1.5.0 OpenAPI still exposes singular `budget`
-// on CreateVirtualKeyRequest/UpdateVirtualKeyRequest, so this resource keeps
-// the singular shape until a multi-budget HCL schema is designed. Tracking
-// follow-up: support multi-budget per VK and per provider config.
+// NOTE (Bifrost v1.5.0 BC6): the v1.5.0 VirtualKey response schema no longer
+// echoes `budget`/`rate_limit` at top-level — they are persisted separately
+// and surfaced by `/api/governance/budgets`. CreateVirtualKeyRequest /
+// UpdateVirtualKeyRequest still accept the singular `budget` object, so we
+// keep the singular HCL shape and reconcile by trusting the plan value
+// when the API response omits the field. Drift detection from the budgets
+// collection is a separate follow-up.
 //
 // apiRespToBudgetModel converts a budget from the API response to TF state.
-// The API may not faithfully echo back calendar_aligned, so we preserve the
-// prior (plan) value when the response omits it or returns the zero value.
+// When the API omits the field (the common v1.5.0 case), the prior plan
+// value is preserved so post-apply state matches the planned value and we
+// avoid a "Provider produced inconsistent result after apply" diagnostic.
+// When present, we still honour the v1.4-era preservation of
+// `calendar_aligned` against silent server-side downgrades.
 func apiRespToBudgetModel(b *bifrostclient.VKBudget, prior *VKBudgetModel) *VKBudgetModel {
 	if b == nil {
-		return nil
+		return prior
 	}
 	calAligned := types.BoolValue(b.CalendarAligned)
 	if !b.CalendarAligned && prior != nil && prior.CalendarAligned.ValueBool() {
@@ -582,9 +588,12 @@ func apiRespToBudgetModel(b *bifrostclient.VKBudget, prior *VKBudgetModel) *VKBu
 	}
 }
 
-func apiRespToRateLimitModel(rl *bifrostclient.VKRateLimit) *VKRateLimitModel {
+// apiRespToRateLimitModel mirrors apiRespToBudgetModel's contract: a nil
+// API value falls back to the plan-side value so the response can omit
+// `rate_limit` (as v1.5.0's VirtualKey schema does) without poisoning state.
+func apiRespToRateLimitModel(rl *bifrostclient.VKRateLimit, prior *VKRateLimitModel) *VKRateLimitModel {
 	if rl == nil {
-		return nil
+		return prior
 	}
 	m := &VKRateLimitModel{
 		TokenMaxLimit:        types.Int64Null(),
@@ -622,6 +631,6 @@ func apiRespToVKProviderConfigModel(pc bifrostclient.VKProviderConfigResponse, p
 		m.AllowedModels = append(m.AllowedModels, types.StringValue(am))
 	}
 	m.Budget = apiRespToBudgetModel(pc.Budget, prior.Budget)
-	m.RateLimit = apiRespToRateLimitModel(pc.RateLimit)
+	m.RateLimit = apiRespToRateLimitModel(pc.RateLimit, prior.RateLimit)
 	return m
 }

@@ -239,7 +239,7 @@ func (r *ProviderKeyResource) Create(ctx context.Context, req resource.CreateReq
 		"name":          plan.Name.ValueString(),
 	})
 
-	apiKey, diags := providerKeyModelToAPI(ctx, &plan, "")
+	apiKey, diags := providerKeyModelToAPI(ctx, &plan, nil, "")
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -304,7 +304,7 @@ func (r *ProviderKeyResource) Update(ctx context.Context, req resource.UpdateReq
 		"key_id":        keyID,
 	})
 
-	apiKey, diags := providerKeyModelToAPI(ctx, &plan, keyID)
+	apiKey, diags := providerKeyModelToAPI(ctx, &plan, &state, keyID)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -404,14 +404,46 @@ func parseProviderKeyImportID(id string) (providerName, keyName string, ok bool)
 // ── Conversion ───────────────────────────────────────────────────────────────
 
 // providerKeyModelToAPI builds a schemas.Key from the plan model. keyID is
-// empty on Create and the state's UUID on Update.
-func providerKeyModelToAPI(ctx context.Context, m *ProviderKeyResourceModel, keyID string) (schemas.Key, diag.Diagnostics) {
+// empty on Create and the state's UUID on Update. prior is the prior state
+// (nil on Create) and is consulted only when `value` is unknown at apply
+// time — that signal should never reach a provider in the normal Terraform
+// flow (the framework resolves dependencies before Create/Update), so this
+// is defensive against custom plan modifiers or framework regressions.
+//
+// Value handling matrix:
+//   - known plaintext → wrap and send (regular path).
+//   - null            → empty EnvVar; the field is Optional because providers
+//     like AWS Bedrock authenticate via the provider-specific block instead.
+//   - unknown + prior → use prior plaintext (preserve secret across Update).
+//   - unknown + no prior → diag error: we refuse to create with a blank value.
+func providerKeyModelToAPI(ctx context.Context, m *ProviderKeyResourceModel, prior *ProviderKeyResourceModel, keyID string) (schemas.Key, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	k := schemas.Key{
 		ID:     keyID,
 		Name:   m.Name.ValueString(),
-		Value:  *schemas.NewEnvVar(m.Value.ValueString()),
 		Weight: m.Weight.ValueFloat64(),
+	}
+
+	switch {
+	case m.Value.IsUnknown():
+		// Update-time fallback: copy the prior plaintext so we never round-trip
+		// an empty secret. Create-time has no prior, so error out.
+		if prior == nil || prior.Value.IsNull() || prior.Value.IsUnknown() {
+			diags.AddAttributeError(
+				path.Root("value"),
+				"Unknown value at apply time",
+				"`value` resolved to an unknown at apply time with no prior state to fall back on. "+
+					"This usually means the attribute depends on a resource that has not yet been created. "+
+					"Break the cycle by providing an explicit value or by depending on a known attribute.",
+			)
+			return k, diags
+		}
+		k.Value = *schemas.NewEnvVar(prior.Value.ValueString())
+	case m.Value.IsNull():
+		// Leave k.Value as the zero EnvVar — Bifrost stores it as empty and
+		// providers like Bedrock ignore the field entirely.
+	default:
+		k.Value = *schemas.NewEnvVar(m.Value.ValueString())
 	}
 
 	if !m.Models.IsNull() && !m.Models.IsUnknown() {
@@ -434,11 +466,7 @@ func providerKeyModelToAPI(ctx context.Context, m *ProviderKeyResourceModel, key
 	}
 
 	if m.BedrockKeyConfig != nil {
-		bkc, d := modelToBedrockKeyConfig(ctx, m.BedrockKeyConfig)
-		diags.Append(d...)
-		if !diags.HasError() {
-			k.BedrockKeyConfig = bkc
-		}
+		k.BedrockKeyConfig = modelToBedrockKeyConfig(m.BedrockKeyConfig)
 	}
 
 	return k, diags
@@ -501,8 +529,7 @@ func apiKeyToProviderKeyModel(apiKey *schemas.Key, prior *ProviderKeyResourceMod
 		if prior != nil {
 			priorBedrock = prior.BedrockKeyConfig
 		}
-		bkc, _ := bedrockKeyConfigToModel(apiKey.BedrockKeyConfig, priorBedrock)
-		m.BedrockKeyConfig = bkc
+		m.BedrockKeyConfig = bedrockKeyConfigToModel(apiKey.BedrockKeyConfig, priorBedrock)
 	}
 
 	return m

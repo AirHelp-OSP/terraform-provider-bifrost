@@ -3,7 +3,6 @@ package resources
 import (
 	"context"
 
-	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/maximhq/bifrost/core/schemas"
@@ -126,8 +125,7 @@ type BedrockKeyConfigModel struct {
 	RoleSessionName types.String `tfsdk:"role_session_name"`
 }
 
-func bedrockKeyConfigToModel(bkc *schemas.BedrockKeyConfig, prior *BedrockKeyConfigModel) (*BedrockKeyConfigModel, diag.Diagnostics) {
-	var diags diag.Diagnostics
+func bedrockKeyConfigToModel(bkc *schemas.BedrockKeyConfig, prior *BedrockKeyConfigModel) *BedrockKeyConfigModel {
 	m := &BedrockKeyConfigModel{}
 
 	priorOf := func(get func(*BedrockKeyConfigModel) types.String) types.String {
@@ -148,11 +146,10 @@ func bedrockKeyConfigToModel(bkc *schemas.BedrockKeyConfig, prior *BedrockKeyCon
 	m.ExternalID = envVarToString(bkc.ExternalID, priorOf(func(p *BedrockKeyConfigModel) types.String { return p.ExternalID }))
 	m.RoleSessionName = envVarToString(bkc.RoleSessionName, priorOf(func(p *BedrockKeyConfigModel) types.String { return p.RoleSessionName }))
 
-	return m, diags
+	return m
 }
 
-func modelToBedrockKeyConfig(_ context.Context, m *BedrockKeyConfigModel) (*schemas.BedrockKeyConfig, diag.Diagnostics) {
-	var diags diag.Diagnostics
+func modelToBedrockKeyConfig(m *BedrockKeyConfigModel) *schemas.BedrockKeyConfig {
 	bkc := &schemas.BedrockKeyConfig{}
 
 	if !m.AccessKey.IsNull() && !m.AccessKey.IsUnknown() {
@@ -168,5 +165,5 @@ func modelToBedrockKeyConfig(_ context.Context, m *BedrockKeyConfigModel) (*sche
 	bkc.ExternalID = stringToEnvVar(m.ExternalID)
 	bkc.RoleSessionName = stringToEnvVar(m.RoleSessionName)
 
-	return bkc, diags
+	return bkc
 }
