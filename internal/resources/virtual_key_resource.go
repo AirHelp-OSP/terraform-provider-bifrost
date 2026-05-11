@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/resourcevalidator"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -11,6 +12,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 
@@ -202,17 +204,27 @@ func (r *VirtualKeyResource) Schema(_ context.Context, _ resource.SchemaRequest,
 							Optional:            true,
 						},
 						"allowed_models": schema.ListAttribute{
-							MarkdownDescription: "Models permitted for this provider. Empty list means all models.",
-							Description:         "Models permitted for this provider. Empty means all.",
-							Optional:            true,
-							ElementType:         types.StringType,
+							MarkdownDescription: "Models permitted for this provider. Use `[\"*\"]` to allow all. " +
+								"**Bifrost v1.5.0 changed the empty-list semantic**: `[]` now means _deny all_, " +
+								"not _allow all_. Provider validates that `\"*\"` is not mixed with specific values.",
+							Description: "Models permitted for this provider. ['*'] means all; [] means none (v1.5.0+).",
+							Optional:    true,
+							ElementType: types.StringType,
+							Validators: []validator.List{
+								listvalidator.UniqueValues(),
+								WildcardNotMixed(),
+							},
 						},
 						"key_ids": schema.ListAttribute{
 							MarkdownDescription: "Specific key UUIDs to allow for this provider. " +
-								"Use `[\"*\"]` for all keys, `[]` (or omit) to deny all.",
+								"Use `[\"*\"]` for all keys, `[]` (or omit) to deny all (Bifrost v1.5.0 deny-by-default).",
 							Description: "Specific key UUIDs to allow for this provider.",
 							Optional:    true,
 							ElementType: types.StringType,
+							Validators: []validator.List{
+								listvalidator.UniqueValues(),
+								WildcardNotMixed(),
+							},
 						},
 						"budget":     budgetSchema,
 						"rate_limit": rateLimitSchema,
@@ -545,6 +557,13 @@ func vkResponseToModel(apiResp *bifrostclient.VirtualKeyResponse, prior *Virtual
 	return m
 }
 
+// NOTE (Bifrost v1.5.0 BC6): the migration guide forward-recommends moving from
+// the singular `budget` object to a `budgets` array on both Virtual Keys and
+// their provider configs. The v1.5.0 OpenAPI still exposes singular `budget`
+// on CreateVirtualKeyRequest/UpdateVirtualKeyRequest, so this resource keeps
+// the singular shape until a multi-budget HCL schema is designed. Tracking
+// follow-up: support multi-budget per VK and per provider config.
+//
 // apiRespToBudgetModel converts a budget from the API response to TF state.
 // The API may not faithfully echo back calendar_aligned, so we preserve the
 // prior (plan) value when the response omits it or returns the zero value.

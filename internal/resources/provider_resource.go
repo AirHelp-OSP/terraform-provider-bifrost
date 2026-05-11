@@ -13,9 +13,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/float64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -36,6 +34,11 @@ func NewProviderResource() resource.Resource {
 }
 
 // ProviderResource manages bifrost_provider resources.
+//
+// As of Bifrost v1.5.0 this resource manages only the provider's configuration
+// (network, proxy, concurrency, custom-provider settings). API keys are managed
+// via the separate bifrost_provider_key resource backed by the dedicated
+// /api/providers/{provider}/keys endpoints.
 type ProviderResource struct {
 	client *bifrostclient.BifrostClient
 }
@@ -45,7 +48,6 @@ type ProviderResource struct {
 type ProviderResourceModel struct {
 	ID                       types.String                `tfsdk:"id"`
 	ProviderName             types.String                `tfsdk:"provider_name"`
-	Keys                     []KeyModel                  `tfsdk:"keys"`
 	NetworkConfig            *NetworkConfigModel         `tfsdk:"network_config"`
 	ProxyConfig              *ProxyConfigModel           `tfsdk:"proxy_config"`
 	ConcurrencyAndBufferSize *ConcurrencyBufferSizeModel `tfsdk:"concurrency_and_buffer_size"`
@@ -53,28 +55,6 @@ type ProviderResourceModel struct {
 	SendBackRawResponse      types.Bool                  `tfsdk:"send_back_raw_response"`
 	CustomProviderConfig     *CustomProviderConfigModel  `tfsdk:"custom_provider_config"`
 	ProviderStatus           types.String                `tfsdk:"provider_status"`
-}
-
-type KeyModel struct {
-	ID               types.String           `tfsdk:"id"`
-	Name             types.String           `tfsdk:"name"`
-	Value            types.String           `tfsdk:"value"`
-	Models           types.List             `tfsdk:"models"`
-	Weight           types.Float64          `tfsdk:"weight"`
-	Enabled          types.Bool             `tfsdk:"enabled"`
-	BedrockKeyConfig *BedrockKeyConfigModel `tfsdk:"bedrock_key_config"`
-}
-
-type BedrockKeyConfigModel struct {
-	AccessKey       types.String `tfsdk:"access_key"`
-	SecretKey       types.String `tfsdk:"secret_key"`
-	SessionToken    types.String `tfsdk:"session_token"`
-	Region          types.String `tfsdk:"region"`
-	ARN             types.String `tfsdk:"arn"`
-	RoleARN         types.String `tfsdk:"role_arn"`
-	ExternalID      types.String `tfsdk:"external_id"`
-	RoleSessionName types.String `tfsdk:"role_session_name"`
-	Deployments     types.Map    `tfsdk:"deployments"`
 }
 
 type NetworkConfigModel struct {
@@ -89,10 +69,11 @@ type NetworkConfigModel struct {
 }
 
 type ProxyConfigModel struct {
-	Type     types.String `tfsdk:"type"`
-	URL      types.String `tfsdk:"url"`
-	Username types.String `tfsdk:"username"`
-	Password types.String `tfsdk:"password"`
+	Type      types.String `tfsdk:"type"`
+	URL       types.String `tfsdk:"url"`
+	Username  types.String `tfsdk:"username"`
+	Password  types.String `tfsdk:"password"`
+	CACertPEM types.String `tfsdk:"ca_cert_pem"`
 }
 
 type ConcurrencyBufferSizeModel struct {
@@ -114,8 +95,9 @@ func (r *ProviderResource) Metadata(_ context.Context, req resource.MetadataRequ
 func (r *ProviderResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Manages a [Bifrost AI provider configuration](https://github.com/maximhq/bifrost) — " +
-			"keys, network settings, proxy, concurrency, and (optionally) a custom-provider base type.",
-		Description: "Manages a Bifrost AI provider configuration.",
+			"network settings, proxy, concurrency, and (optionally) a custom-provider base type. " +
+			"Manage API keys for this provider with the separate `bifrost_provider_key` resource.",
+		Description: "Manages a Bifrost AI provider configuration. Use bifrost_provider_key for keys.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				MarkdownDescription: "Provider identifier (mirrors `provider_name`).",
@@ -155,117 +137,6 @@ func (r *ProviderResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				Optional:            true,
 				Computed:            true,
 				Default:             booldefault.StaticBool(false),
-			},
-			"keys": schema.ListNestedAttribute{
-				MarkdownDescription: "API keys for this provider. Bifrost load-balances across keys by `weight`. " +
-					"For Bedrock, set `value` to an empty string and configure `bedrock_key_config`.",
-				Description: "API keys for this provider.",
-				Optional:    true,
-				NestedObject: schema.NestedAttributeObject{
-					Attributes: map[string]schema.Attribute{
-						"id": schema.StringAttribute{
-							MarkdownDescription: "Bifrost-assigned key identifier. Required by the API to match existing keys " +
-								"on Update; tracked in state automatically.",
-							Description: "Bifrost-assigned key identifier (computed).",
-							Computed:    true,
-							PlanModifiers: []planmodifier.String{
-								stringplanmodifier.UseStateForUnknown(),
-							},
-						},
-						"name": schema.StringAttribute{
-							MarkdownDescription: "Stable identifier for the key (used to match keys across plans).",
-							Description:         "Stable identifier for the key (used for matching during Read).",
-							Required:            true,
-						},
-						"value": schema.StringAttribute{
-							MarkdownDescription: "The API key value. For Bedrock, set this to an empty string and use `bedrock_key_config` instead.",
-							Description:         "The API key value.",
-							Required:            true,
-							Sensitive:           true,
-						},
-						"models": schema.ListAttribute{
-							MarkdownDescription: "Models this key may access. Use `[\"\"]` for all models. Defaults to `[\"\"]`.",
-							Description:         "Models this key can access. Use [\"\"] for all models.",
-							Optional:            true,
-							Computed:            true,
-							ElementType:         types.StringType,
-							PlanModifiers: []planmodifier.List{
-								listplanmodifier.UseStateForUnknown(),
-							},
-						},
-						"weight": schema.Float64Attribute{
-							MarkdownDescription: "Load-balancing weight (relative to other keys for this provider). Defaults to `1.0`.",
-							Description:         "Load-balancing weight.",
-							Optional:            true,
-							Computed:            true,
-							Default:             float64default.StaticFloat64(1.0),
-						},
-						"enabled": schema.BoolAttribute{
-							MarkdownDescription: "Whether the key is active. Defaults to `true`.",
-							Description:         "Whether the key is active.",
-							Optional:            true,
-							Computed:            true,
-							Default:             booldefault.StaticBool(true),
-						},
-						"bedrock_key_config": schema.SingleNestedAttribute{
-							MarkdownDescription: "AWS Bedrock-specific key configuration. " +
-								"Bifrost strips this on `GET`, so it's preserved from prior state on every Read.",
-							Description: "AWS Bedrock-specific key configuration.",
-							Optional:    true,
-							Attributes: map[string]schema.Attribute{
-								"access_key": schema.StringAttribute{
-									MarkdownDescription: "AWS access key ID.",
-									Description:         "AWS access key ID.",
-									Optional:            true,
-									Sensitive:           true,
-								},
-								"secret_key": schema.StringAttribute{
-									MarkdownDescription: "AWS secret access key.",
-									Description:         "AWS secret access key.",
-									Optional:            true,
-									Sensitive:           true,
-								},
-								"session_token": schema.StringAttribute{
-									MarkdownDescription: "AWS session token for temporary credentials.",
-									Description:         "AWS session token for temporary credentials.",
-									Optional:            true,
-									Sensitive:           true,
-								},
-								"region": schema.StringAttribute{
-									MarkdownDescription: "AWS region (e.g. `us-east-1`).",
-									Description:         "AWS region.",
-									Optional:            true,
-								},
-								"arn": schema.StringAttribute{
-									MarkdownDescription: "Amazon Resource Name.",
-									Description:         "Amazon Resource Name.",
-									Optional:            true,
-								},
-								"role_arn": schema.StringAttribute{
-									MarkdownDescription: "IAM role ARN for STS `AssumeRole`.",
-									Description:         "IAM role ARN for STS AssumeRole.",
-									Optional:            true,
-								},
-								"external_id": schema.StringAttribute{
-									MarkdownDescription: "External ID for STS `AssumeRole`.",
-									Description:         "External ID for STS AssumeRole.",
-									Optional:            true,
-								},
-								"role_session_name": schema.StringAttribute{
-									MarkdownDescription: "Session name for STS `AssumeRole`.",
-									Description:         "Session name for STS AssumeRole.",
-									Optional:            true,
-								},
-								"deployments": schema.MapAttribute{
-									MarkdownDescription: "Mapping of model identifiers to inference profiles.",
-									Description:         "Mapping of model identifiers to inference profiles.",
-									Optional:            true,
-									ElementType:         types.StringType,
-								},
-							},
-						},
-					},
-				},
 			},
 			"network_config": schema.SingleNestedAttribute{
 				MarkdownDescription: "Network configuration for upstream provider connections.",
@@ -319,11 +190,12 @@ func (r *ProviderResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 						Default:             booldefault.StaticBool(false),
 					},
 					"ca_cert_pem": schema.StringAttribute{
-						MarkdownDescription: "PEM-encoded CA certificate to trust. Bifrost redacts this on `GET`; the prior value is preserved on Read.",
-						Description:         "PEM-encoded CA certificate to trust.",
-						Optional:            true,
-						Computed:            true,
-						Sensitive:           true,
+						MarkdownDescription: "PEM-encoded CA certificate to trust. Bifrost redacts this on `GET`; the prior value is preserved on Read. " +
+							"Supports `env.VAR_NAME` references (Bifrost v1.5.0+).",
+						Description: "PEM-encoded CA certificate to trust.",
+						Optional:    true,
+						Computed:    true,
+						Sensitive:   true,
 						PlanModifiers: []planmodifier.String{
 							stringplanmodifier.UseStateForUnknown(),
 						},
@@ -331,9 +203,10 @@ func (r *ProviderResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				},
 			},
 			"proxy_config": schema.SingleNestedAttribute{
-				MarkdownDescription: "Outbound proxy configuration for upstream provider connections.",
-				Description:         "Proxy configuration.",
-				Optional:            true,
+				MarkdownDescription: "Outbound proxy configuration for upstream provider connections. " +
+					"`url`, `username`, `password`, and `ca_cert_pem` accept `env.VAR_NAME` references (Bifrost v1.5.0+).",
+				Description: "Proxy configuration.",
+				Optional:    true,
 				Attributes: map[string]schema.Attribute{
 					"type": schema.StringAttribute{
 						MarkdownDescription: "Proxy type. One of `none`, `http`, `socks5`, `environment`.",
@@ -358,6 +231,16 @@ func (r *ProviderResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 						Description:         "Proxy authentication password.",
 						Optional:            true,
 						Sensitive:           true,
+					},
+					"ca_cert_pem": schema.StringAttribute{
+						MarkdownDescription: "PEM-encoded CA certificate to trust for TLS connections through the proxy.",
+						Description:         "PEM-encoded CA certificate to trust for TLS connections through the proxy.",
+						Optional:            true,
+						Computed:            true,
+						Sensitive:           true,
+						PlanModifiers: []planmodifier.String{
+							stringplanmodifier.UseStateForUnknown(),
+						},
 					},
 				},
 			},
@@ -525,16 +408,15 @@ func (r *ProviderResource) Read(ctx context.Context, req resource.ReadRequest, r
 }
 
 func (r *ProviderResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan, priorState ProviderResourceModel
+	var plan ProviderResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
-	resp.Diagnostics.Append(req.State.Get(ctx, &priorState)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
 	tflog.Debug(ctx, "updating Bifrost provider", map[string]any{"provider_name": plan.ProviderName.ValueString()})
 
-	updateReq, diags := modelToUpdateRequest(ctx, plan, &priorState)
+	updateReq, diags := modelToUpdateRequest(ctx, plan)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -583,12 +465,6 @@ func modelToCreateRequest(ctx context.Context, m ProviderResourceModel) (bifrost
 		Provider: schemas.ModelProvider(m.ProviderName.ValueString()),
 	}
 
-	keys, d := modelKeysToAPI(ctx, m.Keys, nil)
-	diags.Append(d...)
-	if !diags.HasError() {
-		req.Keys = keys
-	}
-
 	if m.NetworkConfig != nil {
 		nc, d := modelToNetworkConfig(ctx, m.NetworkConfig)
 		diags.Append(d...)
@@ -619,15 +495,9 @@ func modelToCreateRequest(ctx context.Context, m ProviderResourceModel) (bifrost
 	return req, diags
 }
 
-func modelToUpdateRequest(ctx context.Context, m ProviderResourceModel, prior *ProviderResourceModel) (bifrostclient.UpdateProviderRequest, diag.Diagnostics) {
+func modelToUpdateRequest(ctx context.Context, m ProviderResourceModel) (bifrostclient.UpdateProviderRequest, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	req := bifrostclient.UpdateProviderRequest{}
-
-	keys, d := modelKeysToAPI(ctx, m.Keys, priorKeyIDsByName(prior))
-	diags.Append(d...)
-	if !diags.HasError() {
-		req.Keys = keys
-	}
 
 	if m.NetworkConfig != nil {
 		nc, d := modelToNetworkConfig(ctx, m.NetworkConfig)
@@ -686,22 +556,6 @@ func responseToModel(apiResp *bifrostclient.ProviderResponse, prior *ProviderRes
 		ProviderStatus:      types.StringValue(apiResp.ProviderStatus),
 	}
 
-	priorKeyByName := map[string]KeyModel{}
-	if prior != nil {
-		for _, k := range prior.Keys {
-			priorKeyByName[k.Name.ValueString()] = k
-		}
-	}
-
-	for _, apiKey := range apiResp.Keys {
-		km, d := apiKeyToModel(apiKey, priorKeyByName[apiKey.Name])
-		diags.Append(d...)
-		if diags.HasError() {
-			return nil, diags
-		}
-		m.Keys = append(m.Keys, km)
-	}
-
 	// network_config: only populate state if the user configured the block.
 	// On import, prior has no ProviderStatus yet, so hydrate from the API.
 	if !hasPriorState(prior) || prior.NetworkConfig != nil {
@@ -714,15 +568,16 @@ func responseToModel(apiResp *bifrostclient.ProviderResponse, prior *ProviderRes
 	if apiResp.ProxyConfig != nil {
 		pc := apiResp.ProxyConfig
 		pcModel := &ProxyConfigModel{
-			Type:     types.StringValue(string(pc.Type)),
-			URL:      types.StringValue(pc.URL),
-			Username: types.StringValue(pc.Username),
+			Type: types.StringValue(string(pc.Type)),
 		}
-		if pc.Password == "<REDACTED>" && prior != nil && prior.ProxyConfig != nil {
-			pcModel.Password = prior.ProxyConfig.Password
-		} else {
-			pcModel.Password = types.StringValue(pc.Password)
+		var priorPC *ProxyConfigModel
+		if prior != nil {
+			priorPC = prior.ProxyConfig
 		}
+		pcModel.URL = envVarToString(pc.URL, priorStringOrNull(priorPC, func(p *ProxyConfigModel) types.String { return p.URL }))
+		pcModel.Username = envVarToString(pc.Username, priorStringOrNull(priorPC, func(p *ProxyConfigModel) types.String { return p.Username }))
+		pcModel.Password = envVarToString(pc.Password, priorStringOrNull(priorPC, func(p *ProxyConfigModel) types.String { return p.Password }))
+		pcModel.CACertPEM = envVarToString(pc.CACertPEM, priorStringOrNull(priorPC, func(p *ProxyConfigModel) types.String { return p.CACertPEM }))
 		m.ProxyConfig = pcModel
 	}
 
@@ -746,6 +601,16 @@ func responseToModel(apiResp *bifrostclient.ProviderResponse, prior *ProviderRes
 	return m, diags
 }
 
+// priorStringOrNull returns the named string from a prior model, or null if the
+// prior model itself is nil. Used to feed envVarToString with a sensible
+// "previous value" so redacted server responses don't blow away user state.
+func priorStringOrNull(prior *ProxyConfigModel, get func(*ProxyConfigModel) types.String) types.String {
+	if prior == nil {
+		return types.StringNull()
+	}
+	return get(prior)
+}
+
 type ncModelResult struct {
 	model *NetworkConfigModel
 	diags diag.Diagnostics
@@ -754,7 +619,7 @@ type ncModelResult struct {
 func networkConfigToModel(nc schemas.NetworkConfig, prior *ProviderResourceModel) ncModelResult {
 	var diags diag.Diagnostics
 	m := &NetworkConfigModel{
-		BaseURL:                        types.StringValue(nc.BaseURL),
+		BaseURL:                        emptyStringAsNull(nc.BaseURL),
 		DefaultRequestTimeoutInSeconds: types.Int64Value(int64(nc.DefaultRequestTimeoutInSeconds)),
 		MaxRetries:                     types.Int64Value(int64(nc.MaxRetries)),
 		RetryBackoffInitialMs:          types.Int64Value(nc.RetryBackoffInitial.Milliseconds()),
@@ -762,14 +627,13 @@ func networkConfigToModel(nc schemas.NetworkConfig, prior *ProviderResourceModel
 		InsecureSkipVerify:             types.BoolValue(nc.InsecureSkipVerify),
 	}
 
-	switch {
-	case nc.CACertPEM == "<REDACTED>" && prior != nil && prior.NetworkConfig != nil:
-		m.CACertPEM = prior.NetworkConfig.CACertPEM
-	case nc.CACertPEM == "":
-		m.CACertPEM = types.StringNull()
-	default:
-		m.CACertPEM = types.StringValue(nc.CACertPEM)
+	var priorCA types.String
+	if prior != nil && prior.NetworkConfig != nil {
+		priorCA = prior.NetworkConfig.CACertPEM
+	} else {
+		priorCA = types.StringNull()
 	}
+	m.CACertPEM = envVarToString(nc.CACertPEM, priorCA)
 
 	if len(nc.ExtraHeaders) > 0 {
 		elems := make(map[string]attr.Value, len(nc.ExtraHeaders))
@@ -786,199 +650,6 @@ func networkConfigToModel(nc schemas.NetworkConfig, prior *ProviderResourceModel
 	return ncModelResult{model: m, diags: diags}
 }
 
-// apiKeyToModel converts a schemas.Key to KeyModel, preserving sensitive fields from prior.
-func apiKeyToModel(apiKey schemas.Key, prior KeyModel) (KeyModel, diag.Diagnostics) {
-	var diags diag.Diagnostics
-	km := KeyModel{
-		ID:     types.StringValue(apiKey.ID),
-		Name:   types.StringValue(apiKey.Name),
-		Weight: types.Float64Value(apiKey.Weight),
-	}
-
-	if apiKey.Value.IsRedacted() {
-		km.Value = prior.Value
-	} else {
-		km.Value = types.StringValue(apiKey.Value.Val)
-	}
-
-	if len(apiKey.Models) > 0 {
-		elems := make([]attr.Value, len(apiKey.Models))
-		for i, m := range apiKey.Models {
-			elems[i] = types.StringValue(m)
-		}
-		listVal, d := types.ListValue(types.StringType, elems)
-		diags.Append(d...)
-		km.Models = listVal
-	} else {
-		km.Models = types.ListValueMust(types.StringType, []attr.Value{})
-	}
-
-	if apiKey.Enabled != nil {
-		km.Enabled = types.BoolValue(*apiKey.Enabled)
-	} else {
-		km.Enabled = types.BoolValue(true)
-	}
-
-	// Bifrost strips bedrock_key_config on GET; preserve from prior state.
-	if apiKey.BedrockKeyConfig == nil {
-		km.BedrockKeyConfig = prior.BedrockKeyConfig
-	} else {
-		bkc, d := bedrockKeyConfigToModel(apiKey.BedrockKeyConfig, prior.BedrockKeyConfig)
-		diags.Append(d...)
-		km.BedrockKeyConfig = bkc
-	}
-
-	return km, diags
-}
-
-func bedrockKeyConfigToModel(bkc *schemas.BedrockKeyConfig, prior *BedrockKeyConfigModel) (*BedrockKeyConfigModel, diag.Diagnostics) {
-	var diags diag.Diagnostics
-	m := &BedrockKeyConfigModel{}
-
-	preserveOrSet := func(ev schemas.EnvVar, priorVal types.String) types.String {
-		if ev.IsRedacted() && prior != nil {
-			return priorVal
-		}
-		return types.StringValue(ev.Val)
-	}
-	preserveOrSetPtr := func(ev *schemas.EnvVar, priorVal types.String) types.String {
-		if ev == nil {
-			return types.StringValue("")
-		}
-		return preserveOrSet(*ev, priorVal)
-	}
-
-	var priorAccessKey, priorSecretKey, priorSessionToken types.String
-	var priorRegion, priorARN, priorRoleARN, priorExternalID, priorRoleSessionName types.String
-	if prior != nil {
-		priorAccessKey = prior.AccessKey
-		priorSecretKey = prior.SecretKey
-		priorSessionToken = prior.SessionToken
-		priorRegion = prior.Region
-		priorARN = prior.ARN
-		priorRoleARN = prior.RoleARN
-		priorExternalID = prior.ExternalID
-		priorRoleSessionName = prior.RoleSessionName
-	}
-
-	m.AccessKey = preserveOrSet(bkc.AccessKey, priorAccessKey)
-	m.SecretKey = preserveOrSet(bkc.SecretKey, priorSecretKey)
-	m.SessionToken = preserveOrSetPtr(bkc.SessionToken, priorSessionToken)
-	m.Region = preserveOrSetPtr(bkc.Region, priorRegion)
-	m.ARN = preserveOrSetPtr(bkc.ARN, priorARN)
-	m.RoleARN = preserveOrSetPtr(bkc.RoleARN, priorRoleARN)
-	m.ExternalID = preserveOrSetPtr(bkc.ExternalID, priorExternalID)
-	m.RoleSessionName = preserveOrSetPtr(bkc.RoleSessionName, priorRoleSessionName)
-
-	if len(bkc.Deployments) > 0 {
-		elems := make(map[string]attr.Value, len(bkc.Deployments))
-		for k, v := range bkc.Deployments {
-			elems[k] = types.StringValue(v)
-		}
-		dmap, d := types.MapValue(types.StringType, elems)
-		diags.Append(d...)
-		m.Deployments = dmap
-	} else {
-		m.Deployments = types.MapValueMust(types.StringType, map[string]attr.Value{})
-	}
-
-	return m, diags
-}
-
-// priorKeyIDsByName builds a name→ID lookup from prior state so Update requests
-// can match existing keys by their stable `name` rather than by list index.
-// `keys` is a ListNestedAttribute, and `UseStateForUnknown()` carries plan-time
-// values by index — reordering keys in config would otherwise misassociate IDs
-// and cause Bifrost to update/duplicate the wrong key.
-func priorKeyIDsByName(prior *ProviderResourceModel) map[string]string {
-	if prior == nil {
-		return nil
-	}
-	m := make(map[string]string, len(prior.Keys))
-	for _, k := range prior.Keys {
-		if id := k.ID.ValueString(); id != "" {
-			m[k.Name.ValueString()] = id
-		}
-	}
-	return m
-}
-
-func modelKeysToAPI(ctx context.Context, keys []KeyModel, priorIDsByName map[string]string) ([]schemas.Key, diag.Diagnostics) {
-	var diags diag.Diagnostics
-	result := make([]schemas.Key, 0, len(keys))
-	for _, km := range keys {
-		// On Update, prefer the prior state's ID matched by name. The plan's
-		// `id` is carried by UseStateForUnknown by list index, which is wrong
-		// when the user reorders keys. On Create, priorIDsByName is nil and
-		// km.ID is unknown ⇒ empty string, so the server assigns the ID.
-		id := km.ID.ValueString()
-		if priorID, ok := priorIDsByName[km.Name.ValueString()]; ok {
-			id = priorID
-		}
-		k := schemas.Key{
-			ID:     id,
-			Name:   km.Name.ValueString(),
-			Value:  *schemas.NewEnvVar(km.Value.ValueString()),
-			Weight: km.Weight.ValueFloat64(),
-		}
-		if !km.Models.IsNull() && !km.Models.IsUnknown() {
-			var models []string
-			d := km.Models.ElementsAs(ctx, &models, false)
-			diags.Append(d...)
-			k.Models = models
-		}
-		if len(k.Models) == 0 {
-			k.Models = []string{""}
-		}
-		if !km.Enabled.IsNull() && !km.Enabled.IsUnknown() {
-			v := km.Enabled.ValueBool()
-			k.Enabled = &v
-		}
-		if km.BedrockKeyConfig != nil {
-			bkc, d := modelToBedrockKeyConfig(ctx, km.BedrockKeyConfig)
-			diags.Append(d...)
-			if !diags.HasError() {
-				k.BedrockKeyConfig = bkc
-			}
-		}
-		result = append(result, k)
-	}
-	return result, diags
-}
-
-func modelToBedrockKeyConfig(ctx context.Context, m *BedrockKeyConfigModel) (*schemas.BedrockKeyConfig, diag.Diagnostics) {
-	var diags diag.Diagnostics
-	bkc := &schemas.BedrockKeyConfig{
-		AccessKey: *schemas.NewEnvVar(m.AccessKey.ValueString()),
-		SecretKey: *schemas.NewEnvVar(m.SecretKey.ValueString()),
-	}
-	if v := m.SessionToken.ValueString(); v != "" {
-		bkc.SessionToken = schemas.NewEnvVar(v)
-	}
-	if v := m.Region.ValueString(); v != "" {
-		bkc.Region = schemas.NewEnvVar(v)
-	}
-	if v := m.ARN.ValueString(); v != "" {
-		bkc.ARN = schemas.NewEnvVar(v)
-	}
-	if v := m.RoleARN.ValueString(); v != "" {
-		bkc.RoleARN = schemas.NewEnvVar(v)
-	}
-	if v := m.ExternalID.ValueString(); v != "" {
-		bkc.ExternalID = schemas.NewEnvVar(v)
-	}
-	if v := m.RoleSessionName.ValueString(); v != "" {
-		bkc.RoleSessionName = schemas.NewEnvVar(v)
-	}
-	if !m.Deployments.IsNull() && !m.Deployments.IsUnknown() {
-		deplMap := make(map[string]string)
-		d := m.Deployments.ElementsAs(ctx, &deplMap, false)
-		diags.Append(d...)
-		bkc.Deployments = deplMap
-	}
-	return bkc, diags
-}
-
 func modelToNetworkConfig(ctx context.Context, m *NetworkConfigModel) (schemas.NetworkConfig, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	nc := schemas.NetworkConfig{
@@ -986,7 +657,7 @@ func modelToNetworkConfig(ctx context.Context, m *NetworkConfigModel) (schemas.N
 		DefaultRequestTimeoutInSeconds: int(m.DefaultRequestTimeoutInSeconds.ValueInt64()),
 		MaxRetries:                     int(m.MaxRetries.ValueInt64()),
 		InsecureSkipVerify:             m.InsecureSkipVerify.ValueBool(),
-		CACertPEM:                      m.CACertPEM.ValueString(),
+		CACertPEM:                      stringToEnvVar(m.CACertPEM),
 	}
 	if !m.RetryBackoffInitialMs.IsNull() && !m.RetryBackoffInitialMs.IsUnknown() {
 		nc.RetryBackoffInitial = time.Duration(m.RetryBackoffInitialMs.ValueInt64()) * time.Millisecond
@@ -1005,10 +676,11 @@ func modelToNetworkConfig(ctx context.Context, m *NetworkConfigModel) (schemas.N
 
 func modelToProxyConfig(m *ProxyConfigModel) schemas.ProxyConfig {
 	return schemas.ProxyConfig{
-		Type:     schemas.ProxyType(m.Type.ValueString()),
-		URL:      m.URL.ValueString(),
-		Username: m.Username.ValueString(),
-		Password: m.Password.ValueString(),
+		Type:      schemas.ProxyType(m.Type.ValueString()),
+		URL:       stringToEnvVar(m.URL),
+		Username:  stringToEnvVar(m.Username),
+		Password:  stringToEnvVar(m.Password),
+		CACertPEM: stringToEnvVar(m.CACertPEM),
 	}
 }
 

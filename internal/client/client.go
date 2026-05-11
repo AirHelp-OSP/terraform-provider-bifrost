@@ -123,44 +123,53 @@ func IsConflict(err error) bool {
 // ─── Provider API types ───────────────────────────────────────────────────────
 
 // CreateProviderRequest is the payload for POST /api/providers.
+//
+// As of Bifrost v1.5.0 keys are managed via the dedicated per-key endpoints
+// (/api/providers/{provider}/keys); the embedded `keys` array was removed
+// from the provider create/update payload.
 type CreateProviderRequest struct {
 	Provider                 schemas.ModelProvider             `json:"provider"`
-	Keys                     []schemas.Key                     `json:"keys,omitempty"`
 	NetworkConfig            *schemas.NetworkConfig            `json:"network_config,omitempty"`
 	ConcurrencyAndBufferSize *schemas.ConcurrencyAndBufferSize `json:"concurrency_and_buffer_size,omitempty"`
 	ProxyConfig              *schemas.ProxyConfig              `json:"proxy_config,omitempty"`
 	SendBackRawRequest       *bool                             `json:"send_back_raw_request,omitempty"`
 	SendBackRawResponse      *bool                             `json:"send_back_raw_response,omitempty"`
 	CustomProviderConfig     *schemas.CustomProviderConfig     `json:"custom_provider_config,omitempty"`
-	OpenAIConfig             *schemas.OpenAIConfig             `json:"openai_config,omitempty"`
 }
 
-// UpdateProviderRequest is the payload for PUT /api/providers/{name} (full replace).
-// Omitted fields are left unchanged by Bifrost; this matches how the resource's
-// Optional-only nested blocks behave when the user does not configure them.
+// UpdateProviderRequest is the payload for PUT /api/providers/{name}.
+//
+// Bifrost leaves omitted fields unchanged; the resource sends only the
+// blocks the user has configured. Keys are not part of this payload in
+// v1.5.0+ — manage them via bifrost_provider_key.
 type UpdateProviderRequest struct {
-	Keys                     []schemas.Key                     `json:"keys"`
 	NetworkConfig            *schemas.NetworkConfig            `json:"network_config,omitempty"`
 	ConcurrencyAndBufferSize *schemas.ConcurrencyAndBufferSize `json:"concurrency_and_buffer_size,omitempty"`
 	ProxyConfig              *schemas.ProxyConfig              `json:"proxy_config,omitempty"`
 	SendBackRawRequest       *bool                             `json:"send_back_raw_request,omitempty"`
 	SendBackRawResponse      *bool                             `json:"send_back_raw_response,omitempty"`
 	CustomProviderConfig     *schemas.CustomProviderConfig     `json:"custom_provider_config,omitempty"`
-	OpenAIConfig             *schemas.OpenAIConfig             `json:"openai_config,omitempty"`
 }
 
 // ProviderResponse mirrors handlers.ProviderResponse.
+//
+// The server may still include `keys` in this response for compatibility, but
+// this resource ignores them — bifrost_provider_key is the source of truth.
 type ProviderResponse struct {
 	Name                     schemas.ModelProvider            `json:"name"`
-	Keys                     []schemas.Key                    `json:"keys"`
 	NetworkConfig            schemas.NetworkConfig            `json:"network_config"`
 	ConcurrencyAndBufferSize schemas.ConcurrencyAndBufferSize `json:"concurrency_and_buffer_size"`
 	ProxyConfig              *schemas.ProxyConfig             `json:"proxy_config"`
 	SendBackRawRequest       bool                             `json:"send_back_raw_request"`
 	SendBackRawResponse      bool                             `json:"send_back_raw_response"`
 	CustomProviderConfig     *schemas.CustomProviderConfig    `json:"custom_provider_config,omitempty"`
-	OpenAIConfig             *schemas.OpenAIConfig            `json:"openai_config,omitempty"`
 	ProviderStatus           string                           `json:"provider_status"`
+}
+
+// listProviderKeysResponse wraps the GET /api/providers/{provider}/keys body.
+type listProviderKeysResponse struct {
+	Keys  []schemas.Key `json:"keys"`
+	Total int           `json:"total"`
 }
 
 // CreateProvider calls POST /api/providers.
@@ -193,6 +202,60 @@ func (c *BifrostClient) UpdateProvider(ctx context.Context, name string, req Upd
 // DeleteProvider calls DELETE /api/providers/{name}.
 func (c *BifrostClient) DeleteProvider(ctx context.Context, name string) error {
 	return c.doRequest(ctx, http.MethodDelete, "/api/providers/"+url.PathEscape(name), nil, nil)
+}
+
+// ─── Provider key API ─────────────────────────────────────────────────────────
+//
+// Bifrost v1.5.0 exposes a dedicated per-key API under /api/providers/{provider}/keys.
+// All endpoints take and return a flat schemas.Key body (no envelope).
+
+// CreateProviderKey calls POST /api/providers/{provider}/keys.
+// Send key.ID empty; Bifrost assigns a UUID and returns it in the response.
+func (c *BifrostClient) CreateProviderKey(ctx context.Context, providerName string, key schemas.Key) (*schemas.Key, error) {
+	var resp schemas.Key
+	path := "/api/providers/" + url.PathEscape(providerName) + "/keys"
+	if err := c.doRequest(ctx, http.MethodPost, path, key, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// GetProviderKey calls GET /api/providers/{provider}/keys/{key_id}.
+func (c *BifrostClient) GetProviderKey(ctx context.Context, providerName, keyID string) (*schemas.Key, error) {
+	var resp schemas.Key
+	path := "/api/providers/" + url.PathEscape(providerName) + "/keys/" + url.PathEscape(keyID)
+	if err := c.doRequest(ctx, http.MethodGet, path, nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// ListProviderKeys calls GET /api/providers/{provider}/keys.
+// Used during import to resolve a key name to its server-assigned id.
+func (c *BifrostClient) ListProviderKeys(ctx context.Context, providerName string) ([]schemas.Key, error) {
+	var resp listProviderKeysResponse
+	path := "/api/providers/" + url.PathEscape(providerName) + "/keys"
+	if err := c.doRequest(ctx, http.MethodGet, path, nil, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Keys, nil
+}
+
+// UpdateProviderKey calls PUT /api/providers/{provider}/keys/{key_id}.
+func (c *BifrostClient) UpdateProviderKey(ctx context.Context, providerName, keyID string, key schemas.Key) (*schemas.Key, error) {
+	var resp schemas.Key
+	path := "/api/providers/" + url.PathEscape(providerName) + "/keys/" + url.PathEscape(keyID)
+	if err := c.doRequest(ctx, http.MethodPut, path, key, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// DeleteProviderKey calls DELETE /api/providers/{provider}/keys/{key_id}.
+// The server returns the deleted Key; we discard it.
+func (c *BifrostClient) DeleteProviderKey(ctx context.Context, providerName, keyID string) error {
+	path := "/api/providers/" + url.PathEscape(providerName) + "/keys/" + url.PathEscape(keyID)
+	return c.doRequest(ctx, http.MethodDelete, path, nil, nil)
 }
 
 // ─── Virtual Key API types ────────────────────────────────────────────────────

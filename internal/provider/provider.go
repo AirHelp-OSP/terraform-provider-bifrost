@@ -140,6 +140,7 @@ func (p *BifrostProvider) Configure(ctx context.Context, req provider.ConfigureR
 func (p *BifrostProvider) Resources(_ context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		resources.NewProviderResource,
+		resources.NewProviderKeyResource,
 		resources.NewVirtualKeyResource,
 	}
 }

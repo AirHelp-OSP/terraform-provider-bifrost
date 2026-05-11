@@ -98,9 +98,9 @@ Required:
 
 Optional:
 
-- `allowed_models` (List of String) Models permitted for this provider. Empty list means all models.
+- `allowed_models` (List of String) Models permitted for this provider. Use `["*"]` to allow all. **Bifrost v1.5.0 changed the empty-list semantic**: `[]` now means _deny all_, not _allow all_. Provider validates that `"*"` is not mixed with specific values.
 - `budget` (Attributes) Budget configuration. `reset_duration` accepts Bifrost duration strings such as `1d`, `1w`, or `1M`. (see [below for nested schema](#nestedatt--provider_configs--budget))
-- `key_ids` (List of String) Specific key UUIDs to allow for this provider. Use `["*"]` for all keys, `[]` (or omit) to deny all.
+- `key_ids` (List of String) Specific key UUIDs to allow for this provider. Use `["*"]` for all keys, `[]` (or omit) to deny all (Bifrost v1.5.0 deny-by-default).
 - `rate_limit` (Attributes) Rate-limit configuration. Reset durations accept Bifrost duration strings such as `1m` or `1h`. (see [below for nested schema](#nestedatt--provider_configs--rate_limit))
 - `weight` (Number) Routing weight for this provider (relative to other entries).
 
