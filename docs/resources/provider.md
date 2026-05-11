@@ -3,31 +3,22 @@
 page_title: "bifrost_provider Resource - bifrost"
 subcategory: ""
 description: |-
-  Manages a Bifrost AI provider configuration https://github.com/maximhq/bifrost — keys, network settings, proxy, concurrency, and (optionally) a custom-provider base type.
+  Manages a Bifrost AI provider configuration https://github.com/maximhq/bifrost — network settings, proxy, concurrency, and (optionally) a custom-provider base type. Manage API keys for this provider with the separate bifrost_provider_key resource.
 ---
 
 # bifrost_provider (Resource)
 
-Manages a [Bifrost AI provider configuration](https://github.com/maximhq/bifrost) — keys, network settings, proxy, concurrency, and (optionally) a custom-provider base type.
+Manages a [Bifrost AI provider configuration](https://github.com/maximhq/bifrost) — network settings, proxy, concurrency, and (optionally) a custom-provider base type. Manage API keys for this provider with the separate `bifrost_provider_key` resource.
 
 ## Example Usage
 
 ```terraform
-# AWS Bedrock provider with IAM key credentials.
+# Provider configuration only. API keys are managed separately via
+# bifrost_provider_key — see examples/resources/bifrost_provider_key/.
+
+# AWS Bedrock provider.
 resource "bifrost_provider" "bedrock" {
   provider_name = "bedrock"
-
-  keys = [
-    {
-      name  = "primary"
-      value = "" # Bedrock uses bedrock_key_config, not a raw API key
-      bedrock_key_config = {
-        access_key = "AKIAIOSFODNN7EXAMPLE"
-        secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-        region     = "us-east-1"
-      }
-    }
-  ]
 
   network_config = {
     default_request_timeout_in_seconds = 60
@@ -40,15 +31,6 @@ resource "bifrost_provider" "bedrock" {
 # Custom OpenAI-compatible provider.
 resource "bifrost_provider" "openai_custom" {
   provider_name = "my-openai"
-
-  keys = [
-    {
-      name   = "key1"
-      value  = "sk-my-api-key"
-      models = ["gpt-4o", "gpt-4o-mini"]
-      weight = 1.0
-    }
-  ]
 
   custom_provider_config = {
     base_provider_type = "openai"
@@ -72,9 +54,8 @@ resource "bifrost_provider" "openai_custom" {
 
 - `concurrency_and_buffer_size` (Attributes) Concurrency and buffer settings for the upstream worker pool. (see [below for nested schema](#nestedatt--concurrency_and_buffer_size))
 - `custom_provider_config` (Attributes) Custom provider configuration — base a non-standard provider on a standard one. (see [below for nested schema](#nestedatt--custom_provider_config))
-- `keys` (Attributes List) API keys for this provider. Bifrost load-balances across keys by `weight`. For Bedrock, set `value` to an empty string and configure `bedrock_key_config`. (see [below for nested schema](#nestedatt--keys))
 - `network_config` (Attributes) Network configuration for upstream provider connections. (see [below for nested schema](#nestedatt--network_config))
-- `proxy_config` (Attributes) Outbound proxy configuration for upstream provider connections. (see [below for nested schema](#nestedatt--proxy_config))
+- `proxy_config` (Attributes) Outbound proxy configuration for upstream provider connections. `url`, `username`, `password`, and `ca_cert_pem` accept `env.VAR_NAME` references (Bifrost v1.5.0+). (see [below for nested schema](#nestedatt--proxy_config))
 - `send_back_raw_request` (Boolean) Include the raw provider request in `BifrostResponse` for debugging. Defaults to `false`.
 - `send_back_raw_response` (Boolean) Include the raw provider response in `BifrostResponse` for debugging. Defaults to `false`.
 
@@ -104,49 +85,13 @@ Optional:
 - `is_key_less` (Boolean) Whether the custom provider operates without an API key.
 
 
-<a id="nestedatt--keys"></a>
-### Nested Schema for `keys`
-
-Required:
-
-- `name` (String) Stable identifier for the key (used to match keys across plans).
-- `value` (String, Sensitive) The API key value. For Bedrock, set this to an empty string and use `bedrock_key_config` instead.
-
-Optional:
-
-- `bedrock_key_config` (Attributes) AWS Bedrock-specific key configuration. Bifrost strips this on `GET`, so it's preserved from prior state on every Read. (see [below for nested schema](#nestedatt--keys--bedrock_key_config))
-- `enabled` (Boolean) Whether the key is active. Defaults to `true`.
-- `models` (List of String) Models this key may access. Use `[""]` for all models. Defaults to `[""]`.
-- `weight` (Number) Load-balancing weight (relative to other keys for this provider). Defaults to `1.0`.
-
-Read-Only:
-
-- `id` (String) Bifrost-assigned key identifier. Required by the API to match existing keys on Update; tracked in state automatically.
-
-<a id="nestedatt--keys--bedrock_key_config"></a>
-### Nested Schema for `keys.bedrock_key_config`
-
-Optional:
-
-- `access_key` (String, Sensitive) AWS access key ID.
-- `arn` (String) Amazon Resource Name.
-- `deployments` (Map of String) Mapping of model identifiers to inference profiles.
-- `external_id` (String) External ID for STS `AssumeRole`.
-- `region` (String) AWS region (e.g. `us-east-1`).
-- `role_arn` (String) IAM role ARN for STS `AssumeRole`.
-- `role_session_name` (String) Session name for STS `AssumeRole`.
-- `secret_key` (String, Sensitive) AWS secret access key.
-- `session_token` (String, Sensitive) AWS session token for temporary credentials.
-
-
-
 <a id="nestedatt--network_config"></a>
 ### Nested Schema for `network_config`
 
 Optional:
 
 - `base_url` (String) Override the provider base URL (e.g. for proxies or self-hosted endpoints).
-- `ca_cert_pem` (String, Sensitive) PEM-encoded CA certificate to trust. Bifrost redacts this on `GET`; the prior value is preserved on Read.
+- `ca_cert_pem` (String, Sensitive) PEM-encoded CA certificate to trust. Bifrost redacts this on `GET`; the prior value is preserved on Read. Supports `env.VAR_NAME` references (Bifrost v1.5.0+).
 - `default_request_timeout_in_seconds` (Number) Request timeout in seconds. Defaults to `30`.
 - `extra_headers` (Map of String) Additional HTTP headers to include in upstream requests.
 - `insecure_skip_verify` (Boolean) Disable TLS certificate verification. Defaults to `false`. **Use with caution.**
@@ -160,6 +105,7 @@ Optional:
 
 Optional:
 
+- `ca_cert_pem` (String, Sensitive) PEM-encoded CA certificate to trust for TLS connections through the proxy.
 - `password` (String, Sensitive) Proxy authentication password.
 - `type` (String) Proxy type. One of `none`, `http`, `socks5`, `environment`.
 - `url` (String) Proxy server URL.

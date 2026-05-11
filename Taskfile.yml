@@ -58,7 +58,9 @@ tasks:
   update:openapi:
     desc: Update OpenAPI spec from Bifrost.
     vars:
-      VERSION: v1.4.23
+      VERSION: v1.5.0
     cmds:
       - mkdir -p api/{{ .VERSION }}
-      - curl https://raw.githubusercontent.com/maximhq/bifrost/core/{{.VERSION}}/docs/openapi/openapi.json -o api/{{ .VERSION }}/openapi.json
+      - curl https://raw.githubusercontent.com/maximhq/bifrost/transports/{{.VERSION}}/docs/openapi/openapi.json -o api/{{ .VERSION }}/openapi.json
+
+  

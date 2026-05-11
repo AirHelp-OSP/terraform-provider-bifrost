@@ -37,16 +37,9 @@ provider "bifrost" {
 resource "bifrost_provider" "test" {
   provider_name = var.provider_name
 
-  keys = [
-    {
-      name  = "main"
-      value = "sk-test-placeholder"
-    }
-  ]
-
   custom_provider_config = {
     base_provider_type = "openai"
-    is_key_less        = false
+    is_key_less        = true
   }
 
   network_config = {
