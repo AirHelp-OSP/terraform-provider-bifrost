@@ -133,4 +133,3 @@ func assertVKBudget(t *testing.T, vkID string, wantMax float64, wantReset string
 		t.Errorf("budget.reset_duration for vk %s: got %q, want %q", vkID, got.ResetDuration, wantReset)
 	}
 }
-
