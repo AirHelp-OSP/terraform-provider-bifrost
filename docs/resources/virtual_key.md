@@ -19,11 +19,13 @@ resource "bifrost_virtual_key" "team_key" {
   description = "Virtual key for Team Alpha with monthly budget"
   is_active   = true
 
-  budget = {
-    max_limit        = 500.0
-    reset_duration   = "1M"
-    calendar_aligned = true
-  }
+  budgets = [
+    {
+      max_limit        = 500.0
+      reset_duration   = "1M"
+      calendar_aligned = true
+    },
+  ]
 
   rate_limit = {
     request_max_limit      = 10000
@@ -63,7 +65,7 @@ output "virtual_key_id" {
 
 ### Optional
 
-- `budget` (Attributes) Budget configuration. `reset_duration` accepts Bifrost duration strings such as `1d`, `1w`, or `1M`. (see [below for nested schema](#nestedatt--budget))
+- `budgets` (Attributes List) Budget configurations. Bifrost v1.5.0+ supports multiple budgets per virtual key (or per provider config) as long as each entry has a unique `reset_duration`. `reset_duration` accepts Bifrost duration strings such as `1d`, `1w`, or `1M`. Sending an empty list clears all existing budgets on update. (see [below for nested schema](#nestedatt--budgets))
 - `customer_id` (String) Customer UUID to associate with this key. **Mutually exclusive** with `team_id`. _Note: customers are an enterprise feature._
 - `description` (String) Optional description.
 - `is_active` (Boolean) Whether the virtual key is active. Defaults to `true`.
@@ -76,13 +78,13 @@ output "virtual_key_id" {
 - `id` (String) UUID assigned by Bifrost at creation time.
 - `value` (String, Sensitive) The `sk-bf-...` token. Set only on create; preserved from state on subsequent reads (Bifrost does not return it after creation).
 
-<a id="nestedatt--budget"></a>
-### Nested Schema for `budget`
+<a id="nestedatt--budgets"></a>
+### Nested Schema for `budgets`
 
 Required:
 
 - `max_limit` (Number) Maximum budget in dollars.
-- `reset_duration` (String) Budget reset period (e.g. `1d`, `1w`, `1M`).
+- `reset_duration` (String) Budget reset period (e.g. `1d`, `1w`, `1M`). Must be unique within the list.
 
 Optional:
 
@@ -99,18 +101,18 @@ Required:
 Optional:
 
 - `allowed_models` (List of String) Models permitted for this provider. Use `["*"]` to allow all. **Bifrost v1.5.0 changed the empty-list semantic**: `[]` now means _deny all_, not _allow all_. Provider validates that `"*"` is not mixed with specific values.
-- `budget` (Attributes) Budget configuration. `reset_duration` accepts Bifrost duration strings such as `1d`, `1w`, or `1M`. (see [below for nested schema](#nestedatt--provider_configs--budget))
+- `budgets` (Attributes List) Budget configurations. Bifrost v1.5.0+ supports multiple budgets per virtual key (or per provider config) as long as each entry has a unique `reset_duration`. `reset_duration` accepts Bifrost duration strings such as `1d`, `1w`, or `1M`. Sending an empty list clears all existing budgets on update. (see [below for nested schema](#nestedatt--provider_configs--budgets))
 - `key_ids` (List of String) Specific key UUIDs to allow for this provider. Use `["*"]` for all keys, `[]` (or omit) to deny all (Bifrost v1.5.0 deny-by-default).
 - `rate_limit` (Attributes) Rate-limit configuration. Reset durations accept Bifrost duration strings such as `1m` or `1h`. (see [below for nested schema](#nestedatt--provider_configs--rate_limit))
 - `weight` (Number) Routing weight for this provider (relative to other entries).
 
-<a id="nestedatt--provider_configs--budget"></a>
-### Nested Schema for `provider_configs.budget`
+<a id="nestedatt--provider_configs--budgets"></a>
+### Nested Schema for `provider_configs.budgets`
 
 Required:
 
 - `max_limit` (Number) Maximum budget in dollars.
-- `reset_duration` (String) Budget reset period (e.g. `1d`, `1w`, `1M`).
+- `reset_duration` (String) Budget reset period (e.g. `1d`, `1w`, `1M`). Must be unique within the list.
 
 Optional:
 

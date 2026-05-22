@@ -44,7 +44,7 @@ type VirtualKeyResourceModel struct {
 	TeamID          types.String            `tfsdk:"team_id"`
 	CustomerID      types.String            `tfsdk:"customer_id"`
 	ProviderConfigs []VKProviderConfigModel `tfsdk:"provider_configs"`
-	Budget          *VKBudgetModel          `tfsdk:"budget"`
+	Budgets         []VKBudgetModel         `tfsdk:"budgets"`
 	RateLimit       *VKRateLimitModel       `tfsdk:"rate_limit"`
 }
 
@@ -53,7 +53,7 @@ type VKProviderConfigModel struct {
 	Weight        types.Float64     `tfsdk:"weight"`
 	AllowedModels []types.String    `tfsdk:"allowed_models"`
 	KeyIDs        []types.String    `tfsdk:"key_ids"`
-	Budget        *VKBudgetModel    `tfsdk:"budget"`
+	Budgets       []VKBudgetModel   `tfsdk:"budgets"`
 	RateLimit     *VKRateLimitModel `tfsdk:"rate_limit"`
 }
 
@@ -76,27 +76,31 @@ func (r *VirtualKeyResource) Metadata(_ context.Context, req resource.MetadataRe
 	resp.TypeName = req.ProviderTypeName + "_virtual_key"
 }
 
-var budgetSchema = schema.SingleNestedAttribute{
-	MarkdownDescription: "Budget configuration. `reset_duration` accepts Bifrost duration strings such as `1d`, `1w`, or `1M`.",
-	Description:         "Budget configuration.",
-	Optional:            true,
-	Attributes: map[string]schema.Attribute{
-		"max_limit": schema.Float64Attribute{
-			MarkdownDescription: "Maximum budget in dollars.",
-			Description:         "Maximum budget in dollars.",
-			Required:            true,
-		},
-		"reset_duration": schema.StringAttribute{
-			MarkdownDescription: "Budget reset period (e.g. `1d`, `1w`, `1M`).",
-			Description:         "Budget reset period (e.g. '1d', '1w', '1M').",
-			Required:            true,
-		},
-		"calendar_aligned": schema.BoolAttribute{
-			MarkdownDescription: "Snap resets to calendar boundaries (start of day/week/month) instead of rolling. Defaults to `false`.",
-			Description:         "Snap resets to calendar boundaries.",
-			Optional:            true,
-			Computed:            true,
-			Default:             booldefault.StaticBool(false),
+var budgetsSchema = schema.ListNestedAttribute{
+	MarkdownDescription: "Budget configurations. Bifrost v1.5.0+ supports multiple budgets per virtual key (or per provider config) " +
+		"as long as each entry has a unique `reset_duration`. `reset_duration` accepts Bifrost duration strings such as " +
+		"`1d`, `1w`, or `1M`. Sending an empty list clears all existing budgets on update.",
+	Description: "Budget configurations (multi-budget; each must have a unique reset_duration).",
+	Optional:    true,
+	NestedObject: schema.NestedAttributeObject{
+		Attributes: map[string]schema.Attribute{
+			"max_limit": schema.Float64Attribute{
+				MarkdownDescription: "Maximum budget in dollars.",
+				Description:         "Maximum budget in dollars.",
+				Required:            true,
+			},
+			"reset_duration": schema.StringAttribute{
+				MarkdownDescription: "Budget reset period (e.g. `1d`, `1w`, `1M`). Must be unique within the list.",
+				Description:         "Budget reset period (e.g. '1d', '1w', '1M').",
+				Required:            true,
+			},
+			"calendar_aligned": schema.BoolAttribute{
+				MarkdownDescription: "Snap resets to calendar boundaries (start of day/week/month) instead of rolling. Defaults to `false`.",
+				Description:         "Snap resets to calendar boundaries.",
+				Optional:            true,
+				Computed:            true,
+				Default:             booldefault.StaticBool(false),
+			},
 		},
 	},
 }
@@ -226,12 +230,12 @@ func (r *VirtualKeyResource) Schema(_ context.Context, _ resource.SchemaRequest,
 								WildcardNotMixed(),
 							},
 						},
-						"budget":     budgetSchema,
+						"budgets":    budgetsSchema,
 						"rate_limit": rateLimitSchema,
 					},
 				},
 			},
-			"budget":     budgetSchema,
+			"budgets":    budgetsSchema,
 			"rate_limit": rateLimitSchema,
 		},
 	}
@@ -383,8 +387,8 @@ func vkModelToCreateRequest(m VirtualKeyResourceModel) bifrostclient.CreateVirtu
 		v := m.CustomerID.ValueString()
 		req.CustomerID = &v
 	}
-	if m.Budget != nil {
-		req.Budget = modelToBudgetCreate(m.Budget)
+	if m.Budgets != nil {
+		req.Budgets = modelToBudgets(m.Budgets)
 	}
 	if m.RateLimit != nil {
 		req.RateLimit = modelToRateLimit(m.RateLimit)
@@ -420,12 +424,15 @@ func vkModelToUpdateRequest(m VirtualKeyResourceModel) bifrostclient.UpdateVirtu
 		req.CustomerID = &v
 	}
 
-	if m.Budget != nil {
-		req.Budget = modelToBudgetUpdate(m.Budget)
-	} else {
-		// Empty update budget triggers removal of any existing budget.
-		req.Budget = &bifrostclient.VKUpdateBudget{}
+	// Always send budgets on update so the wire payload reflects exactly what
+	// the user declared: an empty list marshals to `[]` (server clears all
+	// budgets), a populated list triggers server-side reconciliation by
+	// reset_duration, preserving current_usage for matched entries.
+	req.Budgets = modelToBudgets(m.Budgets)
+	if req.Budgets == nil {
+		req.Budgets = []bifrostclient.VKBudget{}
 	}
+
 	if m.RateLimit != nil {
 		req.RateLimit = modelToRateLimit(m.RateLimit)
 	} else {
@@ -438,29 +445,23 @@ func vkModelToUpdateRequest(m VirtualKeyResourceModel) bifrostclient.UpdateVirtu
 	return req
 }
 
-func modelToBudgetCreate(m *VKBudgetModel) *bifrostclient.VKBudget {
-	if m == nil {
+// modelToBudgets converts a TF list of budget models into the wire shape.
+// Returns nil for a nil input so create requests can omit the field; returns
+// an empty (non-nil) slice for an explicit empty list so callers can choose
+// to send `[]` and clear existing budgets server-side.
+func modelToBudgets(ms []VKBudgetModel) []bifrostclient.VKBudget {
+	if ms == nil {
 		return nil
 	}
-	return &bifrostclient.VKBudget{
-		MaxLimit:        m.MaxLimit.ValueFloat64(),
-		ResetDuration:   m.ResetDuration.ValueString(),
-		CalendarAligned: m.CalendarAligned.ValueBool(),
+	out := make([]bifrostclient.VKBudget, 0, len(ms))
+	for _, m := range ms {
+		out = append(out, bifrostclient.VKBudget{
+			MaxLimit:        m.MaxLimit.ValueFloat64(),
+			ResetDuration:   m.ResetDuration.ValueString(),
+			CalendarAligned: m.CalendarAligned.ValueBool(),
+		})
 	}
-}
-
-func modelToBudgetUpdate(m *VKBudgetModel) *bifrostclient.VKUpdateBudget {
-	if m == nil {
-		return nil
-	}
-	maxLimit := m.MaxLimit.ValueFloat64()
-	resetDur := m.ResetDuration.ValueString()
-	calAligned := m.CalendarAligned.ValueBool()
-	return &bifrostclient.VKUpdateBudget{
-		MaxLimit:        &maxLimit,
-		ResetDuration:   &resetDur,
-		CalendarAligned: &calAligned,
-	}
+	return out
 }
 
 func modelToRateLimit(m *VKRateLimitModel) *bifrostclient.VKRateLimit {
@@ -498,8 +499,8 @@ func modelToVKProviderConfigCreate(pc VKProviderConfigModel) bifrostclient.VKPro
 	for _, k := range pc.KeyIDs {
 		c.KeyIDs = append(c.KeyIDs, k.ValueString())
 	}
-	if pc.Budget != nil {
-		c.Budget = modelToBudgetCreate(pc.Budget)
+	if pc.Budgets != nil {
+		c.Budgets = modelToBudgets(pc.Budgets)
 	}
 	if pc.RateLimit != nil {
 		c.RateLimit = modelToRateLimit(pc.RateLimit)
@@ -536,13 +537,13 @@ func vkResponseToModel(apiResp *bifrostclient.VirtualKeyResponse, prior *Virtual
 		m.CustomerID = types.StringNull()
 	}
 
-	var priorBudget *VKBudgetModel
+	var priorBudgets []VKBudgetModel
 	var priorRateLimit *VKRateLimitModel
 	if prior != nil {
-		priorBudget = prior.Budget
+		priorBudgets = prior.Budgets
 		priorRateLimit = prior.RateLimit
 	}
-	m.Budget = apiRespToBudgetModel(apiResp.Budget, priorBudget)
+	m.Budgets = apiRespToBudgets(apiResp.Budgets, priorBudgets)
 	m.RateLimit = apiRespToRateLimitModel(apiResp.RateLimit, priorRateLimit)
 
 	priorPCByProvider := map[string]VKProviderConfigModel{}
@@ -559,33 +560,38 @@ func vkResponseToModel(apiResp *bifrostclient.VirtualKeyResponse, prior *Virtual
 	return m
 }
 
-// NOTE (Bifrost v1.5.0 BC6): the v1.5.0 VirtualKey response schema no longer
-// echoes `budget`/`rate_limit` at top-level — they are persisted separately
-// and surfaced by `/api/governance/budgets`. CreateVirtualKeyRequest /
-// UpdateVirtualKeyRequest still accept the singular `budget` object, so we
-// keep the singular HCL shape and reconcile by trusting the plan value
-// when the API response omits the field. Drift detection from the budgets
-// collection is a separate follow-up.
+// apiRespToBudgets converts the budgets list from an API response into TF state.
 //
-// apiRespToBudgetModel converts a budget from the API response to TF state.
-// When the API omits the field (the common v1.5.0 case), the prior plan
-// value is preserved so post-apply state matches the planned value and we
-// avoid a "Provider produced inconsistent result after apply" diagnostic.
-// When present, we still honour the v1.4-era preservation of
-// `calendar_aligned` against silent server-side downgrades.
-func apiRespToBudgetModel(b *bifrostclient.VKBudget, prior *VKBudgetModel) *VKBudgetModel {
-	if b == nil {
+// Matching is keyed by reset_duration (the same key the server uses to reconcile
+// multi-budget updates), letting us preserve prior `calendar_aligned` when the
+// server silently downgrades it to false.
+//
+// When the API omits or returns an empty budgets list, we fall back to the prior
+// plan value so post-apply state still matches the planned value (avoiding
+// "Provider produced inconsistent result after apply"). The plan vs server
+// drift between budgets is a separate follow-up; this preserves the previous
+// v1.5.0 BC6 behavior for the top-level case.
+func apiRespToBudgets(bs []bifrostclient.VKBudget, prior []VKBudgetModel) []VKBudgetModel {
+	if len(bs) == 0 {
 		return prior
 	}
-	calAligned := types.BoolValue(b.CalendarAligned)
-	if !b.CalendarAligned && prior != nil && prior.CalendarAligned.ValueBool() {
-		calAligned = prior.CalendarAligned
+	priorByDuration := map[string]VKBudgetModel{}
+	for _, pb := range prior {
+		priorByDuration[pb.ResetDuration.ValueString()] = pb
 	}
-	return &VKBudgetModel{
-		MaxLimit:        types.Float64Value(b.MaxLimit),
-		ResetDuration:   types.StringValue(b.ResetDuration),
-		CalendarAligned: calAligned,
+	out := make([]VKBudgetModel, 0, len(bs))
+	for _, b := range bs {
+		calAligned := types.BoolValue(b.CalendarAligned)
+		if pb, ok := priorByDuration[b.ResetDuration]; ok && !b.CalendarAligned && pb.CalendarAligned.ValueBool() {
+			calAligned = pb.CalendarAligned
+		}
+		out = append(out, VKBudgetModel{
+			MaxLimit:        types.Float64Value(b.MaxLimit),
+			ResetDuration:   types.StringValue(b.ResetDuration),
+			CalendarAligned: calAligned,
+		})
 	}
+	return out
 }
 
 // apiRespToRateLimitModel mirrors apiRespToBudgetModel's contract: a nil
@@ -630,7 +636,7 @@ func apiRespToVKProviderConfigModel(pc bifrostclient.VKProviderConfigResponse, p
 	for _, am := range pc.AllowedModels {
 		m.AllowedModels = append(m.AllowedModels, types.StringValue(am))
 	}
-	m.Budget = apiRespToBudgetModel(pc.Budget, prior.Budget)
+	m.Budgets = apiRespToBudgets(pc.Budgets, prior.Budgets)
 	m.RateLimit = apiRespToRateLimitModel(pc.RateLimit, prior.RateLimit)
 	return m
 }
