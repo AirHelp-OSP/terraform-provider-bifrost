@@ -44,10 +44,12 @@ resource "bifrost_virtual_key" "test" {
   description = var.description
   is_active   = true
 
-  budget = {
-    max_limit      = var.budget_limit
-    reset_duration = "1M"
-  }
+  budgets = [
+    {
+      max_limit      = var.budget_limit
+      reset_duration = "1M"
+    },
+  ]
 }
 
 output "vk_id" {
@@ -64,5 +66,5 @@ output "description" {
 }
 
 output "budget_limit" {
-  value = bifrost_virtual_key.test.budget.max_limit
+  value = bifrost_virtual_key.test.budgets[0].max_limit
 }

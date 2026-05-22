@@ -4,11 +4,13 @@ resource "bifrost_virtual_key" "team_key" {
   description = "Virtual key for Team Alpha with monthly budget"
   is_active   = true
 
-  budget = {
-    max_limit        = 500.0
-    reset_duration   = "1M"
-    calendar_aligned = true
-  }
+  budgets = [
+    {
+      max_limit        = 500.0
+      reset_duration   = "1M"
+      calendar_aligned = true
+    },
+  ]
 
   rate_limit = {
     request_max_limit      = 10000

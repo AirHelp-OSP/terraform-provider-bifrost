@@ -263,18 +263,16 @@ func (c *BifrostClient) DeleteProviderKey(ctx context.Context, providerName, key
 
 // ─── Virtual Key API types ────────────────────────────────────────────────────
 
-// VKBudget is the budget shape used in both create requests and API responses.
+// VKBudget is a single budget entry, used in create/update requests and read responses.
+//
+// Bifrost v1.5.0 introduced multi-budget: each budget is a distinct entry keyed by
+// reset_duration. The same shape works for both create and update; updates are a full
+// replacement that the server reconciles by reset_duration (preserving current_usage
+// for matched entries).
 type VKBudget struct {
 	MaxLimit        float64 `json:"max_limit"`
 	ResetDuration   string  `json:"reset_duration"`
 	CalendarAligned bool    `json:"calendar_aligned,omitempty"`
-}
-
-// VKUpdateBudget is the budget shape used in update requests (all pointer fields).
-type VKUpdateBudget struct {
-	MaxLimit        *float64 `json:"max_limit,omitempty"`
-	ResetDuration   *string  `json:"reset_duration,omitempty"`
-	CalendarAligned *bool    `json:"calendar_aligned,omitempty"`
 }
 
 // VKRateLimit is the rate limit shape used in create requests and API responses.
@@ -291,7 +289,7 @@ type VKProviderConfigCreate struct {
 	Weight        float64      `json:"weight,omitempty"`
 	AllowedModels []string     `json:"allowed_models,omitempty"`
 	KeyIDs        []string     `json:"key_ids,omitempty"`
-	Budget        *VKBudget    `json:"budget,omitempty"`
+	Budgets       []VKBudget   `json:"budgets,omitempty"`
 	RateLimit     *VKRateLimit `json:"rate_limit,omitempty"`
 }
 
@@ -301,7 +299,7 @@ type VKProviderConfigResponse struct {
 	Provider      string       `json:"provider"`
 	Weight        *float64     `json:"weight"`
 	AllowedModels []string     `json:"allowed_models"`
-	Budget        *VKBudget    `json:"budget,omitempty"`
+	Budgets       []VKBudget   `json:"budgets,omitempty"`
 	RateLimit     *VKRateLimit `json:"rate_limit,omitempty"`
 }
 
@@ -315,7 +313,7 @@ type VirtualKeyResponse struct {
 	ProviderConfigs []VKProviderConfigResponse `json:"provider_configs"`
 	TeamID          *string                    `json:"team_id,omitempty"`
 	CustomerID      *string                    `json:"customer_id,omitempty"`
-	Budget          *VKBudget                  `json:"budget,omitempty"`
+	Budgets         []VKBudget                 `json:"budgets,omitempty"`
 	RateLimit       *VKRateLimit               `json:"rate_limit,omitempty"`
 }
 
@@ -336,7 +334,7 @@ type CreateVirtualKeyRequest struct {
 	ProviderConfigs []VKProviderConfigCreate `json:"provider_configs,omitempty"`
 	TeamID          *string                  `json:"team_id,omitempty"`
 	CustomerID      *string                  `json:"customer_id,omitempty"`
-	Budget          *VKBudget                `json:"budget,omitempty"`
+	Budgets         []VKBudget               `json:"budgets,omitempty"`
 	RateLimit       *VKRateLimit             `json:"rate_limit,omitempty"`
 	IsActive        *bool                    `json:"is_active,omitempty"`
 }
@@ -348,13 +346,25 @@ type CreateVirtualKeyRequest struct {
 // team_id and customer_id intentionally lack omitempty: a nil pointer marshals
 // to JSON null, which Bifrost treats as an explicit clear of any existing
 // association. Omitting them would leave a previous value in place.
+//
+// Budgets is a full replacement on update: the server reconciles by reset_duration,
+// preserving current_usage for matched entries and deleting any not present in the
+// request. The server's gate is `if req.Budgets != nil`, so:
+//   - nil slice marshals to JSON null → server treats as untouched
+//   - empty non-nil slice marshals to `[]` → server clears all VK budgets
+//   - populated slice → reconcile
+//
+// `omitempty` is intentionally NOT set on Budgets: Go's encoder treats both nil
+// and empty slices as "empty" for omitempty purposes, which would collapse the
+// "untouched" vs "clear" distinction. Sending `"budgets": null` for nil is fine
+// because the server decodes JSON null to a nil Go slice.
 type UpdateVirtualKeyRequest struct {
 	Name            *string                  `json:"name,omitempty"`
 	Description     *string                  `json:"description,omitempty"`
 	ProviderConfigs []VKProviderConfigCreate `json:"provider_configs,omitempty"`
 	TeamID          *string                  `json:"team_id"`
 	CustomerID      *string                  `json:"customer_id"`
-	Budget          *VKUpdateBudget          `json:"budget,omitempty"`
+	Budgets         []VKBudget               `json:"budgets"`
 	RateLimit       *VKRateLimit             `json:"rate_limit,omitempty"`
 	IsActive        *bool                    `json:"is_active,omitempty"`
 }
