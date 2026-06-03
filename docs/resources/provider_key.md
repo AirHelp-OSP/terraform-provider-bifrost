@@ -3,12 +3,12 @@
 page_title: "bifrost_provider_key Resource - bifrost"
 subcategory: ""
 description: |-
-  Manages a single API key on a Bifrost provider https://github.com/maximhq/bifrost. Backed by Bifrost v1.5.0's per-key endpoints (/api/providers/{provider}/keys). Reference the parent provider via provider_name = bifrost_provider.X.provider_name.
+  Manages a single API key on a Bifrost provider https://github.com/maximhq/bifrost. Backed by Bifrost v1.5.0's per-key endpoints (/api/providers/{provider}/keys). Reference the parent provider via provider_name = bifrost_provider.X.provider_name. The secret is supplied via the write-only value argument and is never stored in state.
 ---
 
 # bifrost_provider_key (Resource)
 
-Manages a single API key on a [Bifrost provider](https://github.com/maximhq/bifrost). Backed by Bifrost v1.5.0's per-key endpoints (`/api/providers/{provider}/keys`). Reference the parent provider via `provider_name = bifrost_provider.X.provider_name`.
+Manages a single API key on a [Bifrost provider](https://github.com/maximhq/bifrost). Backed by Bifrost v1.5.0's per-key endpoints (`/api/providers/{provider}/keys`). Reference the parent provider via `provider_name = bifrost_provider.X.provider_name`. The secret is supplied via the write-only `value` argument and is never stored in state.
 
 ## Example Usage
 
@@ -37,7 +37,9 @@ resource "bifrost_provider_key" "bedrock_primary" {
   }
 }
 
-# OpenAI-compatible custom provider with two weighted keys.
+# OpenAI-compatible custom provider with two weighted keys. The secret is set
+# via the write-only `value` argument (never stored in state; requires
+# Terraform >= 1.11 / OpenTofu >= 1.10).
 resource "bifrost_provider_key" "openai_primary" {
   provider_name = bifrost_provider.openai_custom.provider_name
   name          = "primary"
@@ -65,17 +67,20 @@ resource "bifrost_provider_key" "openai_secondary" {
 
 ### Optional
 
+> **NOTE**: [Write-only arguments](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments) are supported in Terraform 1.11 and later.
+
 - `bedrock_key_config` (Attributes) AWS Bedrock-specific key configuration. Bifrost redacts sensitive fields on read; prior state values are preserved on every Read. (see [below for nested schema](#nestedatt--bedrock_key_config))
 - `enabled` (Boolean) Whether the key is active. Defaults to `true`.
 - `model_aliases` (Map of String) Mapping of user-facing model names to provider-specific identifiers (e.g. Bedrock inference profile ARNs, Azure deployment names, fine-tuned model IDs). Replaces the Bedrock-only `deployments` map from Bifrost v1.4.x.
 - `models` (List of String) Models this key may access (whitelist). Use `["*"]` to allow all (the default). **Bifrost v1.5.0 changed the empty-list semantic**: `[]` now means _deny all_, not _allow all_. Provider validates that `"*"` is not mixed with specific values.
-- `value` (String, Sensitive) The API key value. Bifrost redacts this on read, so the prior state value is preserved across plans. Supports `env.VAR_NAME` references. Optional because some providers (notably AWS Bedrock) ignore the field — credentials live in the provider-specific block (`bedrock_key_config`) instead.
+- `value` (String, Sensitive, [Write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments)) The API key value, supplied as a [write-only argument](https://developer.hashicorp.com/terraform/language/resources/ephemeral/write-only): it is sent to Bifrost but **never stored in Terraform state**. Changing it updates the computed `value_sha256`, which is what drives the diff. Supports `env.VAR_NAME` references. Optional because some providers (notably AWS Bedrock) ignore the field — credentials live in the provider-specific block (`bedrock_key_config`) instead. **Requires Terraform >= 1.11 / OpenTofu >= 1.10.**
 - `weight` (Number) Load-balancing weight relative to other keys on this provider. Defaults to `1.0`.
 
 ### Read-Only
 
 - `id` (String) Composite identifier `"<provider_name>:<name>"`. Used as the import ID.
 - `key_id` (String) Server-assigned UUID for the key (used internally to address PUT/DELETE).
+- `value_sha256` (String) SHA-256 hex digest of `value`, stored in place of the plaintext secret. Terraform compares this digest across plans to detect when the key value changes (the secret itself is never written to state). Null when no `value` is set.
 
 <a id="nestedatt--bedrock_key_config"></a>
 ### Nested Schema for `bedrock_key_config`

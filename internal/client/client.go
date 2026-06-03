@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/maximhq/bifrost/core/schemas"
@@ -116,6 +117,19 @@ func IsConflict(err error) bool {
 	var apiErr *APIError
 	if errors.As(err, &apiErr) {
 		return apiErr.StatusCode == http.StatusConflict
+	}
+	return false
+}
+
+// IsAlreadyExists reports whether err is a Bifrost "a record with this name
+// already exists" rejection. Bifrost surfaces this as an HTTP 500 (not 409),
+// so we match on the message body rather than the status code: a name
+// collision means the record exists server-side but isn't tracked in
+// Terraform state, which the caller turns into import guidance.
+func IsAlreadyExists(err error) bool {
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		return strings.Contains(strings.ToLower(apiErr.Body), "already exists")
 	}
 	return false
 }

@@ -63,4 +63,10 @@ tasks:
       - mkdir -p api/{{ .VERSION }}
       - curl https://raw.githubusercontent.com/maximhq/bifrost/transports/{{.VERSION}}/docs/openapi/openapi.json -o api/{{ .VERSION }}/openapi.json
 
-  
+  hacks:terraformrc:
+    desc: Render hacks/.terraformrc.gotmpl to ~/.terraformrc with this repo's absolute path.
+    env:
+      PROVIDER_DIR:
+        sh: pwd
+    cmds:
+      - gomplate -f hacks/.terraformrc.gotmpl -o {{.HOME}}/.terraformrc
