@@ -22,7 +22,9 @@ resource "bifrost_provider_key" "bedrock_primary" {
   }
 }
 
-# OpenAI-compatible custom provider with two weighted keys.
+# OpenAI-compatible custom provider with two weighted keys. The secret is set
+# via the write-only `value` argument (never stored in state; requires
+# Terraform >= 1.11 / OpenTofu >= 1.10).
 resource "bifrost_provider_key" "openai_primary" {
   provider_name = bifrost_provider.openai_custom.provider_name
   name          = "primary"

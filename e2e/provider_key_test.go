@@ -81,7 +81,8 @@ func TestBifrostProviderKeyResource(t *testing.T) {
 		t.Fatalf("import primary: %v", err)
 	}
 
-	// First post-import apply re-sends the redacted `value` from config.
+	// First post-import apply re-sends the write-only `value` from config (import
+	// seeds no value_sha256, so the digest goes null → hash and drives one update).
 	terraform.Apply(t, opts)
 	if exitCode := terraform.PlanExitCode(t, opts); exitCode != 0 {
 		t.Errorf("plan after post-import apply: expected no changes (exit 0), got exit %d", exitCode)
