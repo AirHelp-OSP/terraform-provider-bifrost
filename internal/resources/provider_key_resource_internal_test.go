@@ -349,6 +349,128 @@ func TestEnvVarToString_EmptyWithNullPriorYieldsNull(t *testing.T) {
 	}
 }
 
+// TestEnvVarToString_NonRedactedServerValueDoesNotOverridePrior is the
+// regression guard for the cross-version "inconsistent values for sensitive
+// attribute" apply failure. Bifrost redacts these fields on read, so a
+// non-redacted API echo is never a source of truth. When the response carries a
+// concrete value that differs from the known prior — the plan during
+// Create/Update, existing state during Read — the projection must keep the prior
+// so applied state equals the plan. Two shapes trigger it in the wild:
+//   - a legacy JSON secret blob written by a pre-v1.6 provider (core v1.5.x),
+//     which could not parse the v1.6 SecretVar wire form and stored the raw
+//     `{"value":"...","type":"plain_text"}` string as the field value; and
+//   - any server that returns a stored value non-redacted.
+//
+// Either one, passed through verbatim, diverges from the plan and aborts apply.
+func TestEnvVarToString_NonRedactedServerValueDoesNotOverridePrior(t *testing.T) {
+	// Plan omits the credential (null); server echoes a legacy blob. Must be null.
+	blob := `{"value":"AKIA` + repeat("*", 24) + `MPLE","type":"plain_text"}`
+	if got := envVarToString(&schemas.SecretVar{Val: blob}, types.StringNull()); !got.IsNull() {
+		t.Errorf("legacy blob + null prior: got %q, want null", got.ValueString())
+	}
+	// Plan sets region; server returns a different concrete value. Must keep plan.
+	if got := envVarToString(&schemas.SecretVar{Val: "us-east-1"}, types.StringValue("eu-west-1")); got.ValueString() != "eu-west-1" {
+		t.Errorf("server drift + prior: got %q, want plan value %q", got.ValueString(), "eu-west-1")
+	}
+	// No prior (import / first read): a genuine plaintext is still adopted.
+	if got := envVarToString(&schemas.SecretVar{Val: "us-east-1"}, types.StringNull()); got.ValueString() != "us-east-1" {
+		t.Errorf("plaintext + null prior: got %q, want adopted %q", got.ValueString(), "us-east-1")
+	}
+}
+
+// TestEnvVarToString_UnknownPriorResolvesFromAPI guards the Computed-attribute
+// path (e.g. network_config.ca_cert_pem, which plans as unknown): every value
+// must be known after apply, so an unknown prior must be resolved from the API
+// response — never returned verbatim, which errors as "unknown value after
+// apply". This is the regression the prior-first reordering introduced.
+func TestEnvVarToString_UnknownPriorResolvesFromAPI(t *testing.T) {
+	// unknown prior + nil/placeholder server value → known null
+	if got := envVarToString(nil, types.StringUnknown()); !got.IsNull() {
+		t.Errorf("unknown prior + nil server: got %q, want null", got.ValueString())
+	}
+	// unknown prior + genuine server value → adopt it (known)
+	if got := envVarToString(schemas.NewSecretVar("pem-data"), types.StringUnknown()); got.ValueString() != "pem-data" {
+		t.Errorf("unknown prior + server value: got %q, want adopted %q", got.ValueString(), "pem-data")
+	}
+}
+
+// TestBedrockKeyConfigToModel_UpgradeFromLegacyBlobStateIsConsistent mirrors the
+// full upgrade path a Bedrock user hits after moving off a pre-v1.6 provider:
+// prior state holds JSON-blob-poisoned credentials, the config now omits the
+// creds and keeps a plaintext region, and the partial update makes Bifrost clear
+// the creds ({"value":""}) and return the region redacted. The projected state
+// must equal the plan (null creds, plaintext region) — anything else is the
+// "inconsistent values for sensitive attribute" error.
+func TestBedrockKeyConfigToModel_UpgradeFromLegacyBlobStateIsConsistent(t *testing.T) {
+	api := &schemas.BedrockKeyConfig{
+		AccessKey: schemas.SecretVar{Val: ""},                              // server cleared
+		SecretKey: schemas.SecretVar{Val: ""},                              // server cleared
+		Region:    schemas.NewSecretVar("eu-w" + repeat("*", 24) + "st-1"), // redacted
+	}
+	plan := &BedrockKeyConfigModel{
+		AccessKey: types.StringNull(),
+		SecretKey: types.StringNull(),
+		Region:    types.StringValue("eu-west-1"),
+	}
+	got := bedrockKeyConfigToModel(api, plan)
+	if !got.AccessKey.IsNull() {
+		t.Errorf("access_key: got %q, want null (must match planned null)", got.AccessKey.ValueString())
+	}
+	if !got.SecretKey.IsNull() {
+		t.Errorf("secret_key: got %q, want null (must match planned null)", got.SecretKey.ValueString())
+	}
+	if got.Region.ValueString() != "eu-west-1" {
+		t.Errorf("region: got %q, want planned %q", got.Region.ValueString(), "eu-west-1")
+	}
+}
+
+// TestBedrockKeyConfigToModel_RawServerCredsDoNotOverridePlan reproduces the
+// real-world upgrade failure: some Bifrost deployments echo the stored
+// credentials back NON-redacted on the update response (unlike stock v1.6.4,
+// which returns them empty). The config omits the creds, so the plan is null for
+// both — and the applied state must be null too. If the projection adopts the
+// non-redacted echo instead, applied state diverges from the plan and Terraform
+// aborts with ".bedrock_key_config: inconsistent values for sensitive attribute".
+func TestBedrockKeyConfigToModel_RawServerCredsDoNotOverridePlan(t *testing.T) {
+	api := &schemas.BedrockKeyConfig{
+		AccessKey: *schemas.NewSecretVar("AKIAIOSFODNN7EXAMPLE"),                     // raw, non-redacted
+		SecretKey: *schemas.NewSecretVar("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"), // raw, non-redacted
+		Region:    schemas.NewSecretVar("eu-west-1"),                                 // raw, non-redacted
+	}
+	plan := &BedrockKeyConfigModel{ // config omits the creds; keeps region
+		AccessKey: types.StringNull(),
+		SecretKey: types.StringNull(),
+		Region:    types.StringValue("eu-west-1"),
+	}
+	got := bedrockKeyConfigToModel(api, plan)
+	if !got.AccessKey.IsNull() {
+		t.Errorf("access_key: got %q, want null (must match planned null)", got.AccessKey.ValueString())
+	}
+	if !got.SecretKey.IsNull() {
+		t.Errorf("secret_key: got %q, want null (must match planned null)", got.SecretKey.ValueString())
+	}
+	if got.Region.ValueString() != "eu-west-1" {
+		t.Errorf("region: got %q, want planned %q", got.Region.ValueString(), "eu-west-1")
+	}
+}
+
+// TestBedrockKeyConfigToModel_ImportProjectsFromServer confirms the no-prior
+// path still projects from the API (folding redacted/empty/blob placeholders to
+// null) so the first Read after ImportState is populated rather than empty.
+func TestBedrockKeyConfigToModel_ImportProjectsFromServer(t *testing.T) {
+	api := &schemas.BedrockKeyConfig{
+		AccessKey: schemas.SecretVar{Val: "AKIA" + repeat("*", 24) + "MPLE"}, // redacted → null
+		Region:    schemas.NewSecretVar("us-east-1"),                         // plaintext → adopted
+	}
+	got := bedrockKeyConfigToModel(api, nil)
+	if !got.AccessKey.IsNull() {
+		t.Errorf("access_key: got %q, want null (redacted on import)", got.AccessKey.ValueString())
+	}
+	if got.Region.ValueString() != "us-east-1" {
+		t.Errorf("region: got %q, want adopted %q", got.Region.ValueString(), "us-east-1")
+	}
+}
+
 // sha256Hello is the well-known external digest SHA-256("hello"), used to
 // guard sha256OfValue against accidentally hashing the wrong bytes or
 // double-encoding.
