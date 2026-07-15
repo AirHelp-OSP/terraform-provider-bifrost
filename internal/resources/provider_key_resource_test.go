@@ -100,3 +100,34 @@ resource "bifrost_provider_key" "test" {
 		},
 	})
 }
+
+// TestAccProviderKey_InferenceProfileARNMissingProviderName verifies that when
+// provider_name is omitted (null), the config validator does NOT run — it must
+// not stack a secondary "inference_profile_arn requires the bedrock provider"
+// diagnostic on top of the framework's primary "missing required argument"
+// error. The surfaced error must be the missing-argument one.
+func TestAccProviderKey_InferenceProfileARNMissingProviderName(t *testing.T) {
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: provider.ProtoV6ProviderFactories(),
+		Steps: []resource.TestStep{
+			{
+				Config: `
+provider "bifrost" {
+  endpoint = "http://example.invalid"
+}
+
+resource "bifrost_provider_key" "test" {
+  name = "primary"
+  model_aliases = {
+    "claude" = {
+      model_id              = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+      inference_profile_arn = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc"
+    }
+  }
+}
+`,
+				ExpectError: regexp.MustCompile(`(?s)(The argument "provider_name" is required|Missing required argument)`),
+			},
+		},
+	})
+}

@@ -353,8 +353,12 @@ func (inferenceProfileARNRequiresBedrock) ValidateResource(ctx context.Context, 
 		return
 	}
 
-	// Nothing to check until both the provider and the aliases are known.
-	if cfg.ProviderName.IsUnknown() || cfg.ModelAliases.IsNull() || cfg.ModelAliases.IsUnknown() {
+	// Nothing to check until both the provider and the aliases are known. A null
+	// provider_name (Required but unset) is treated like unknown: the framework
+	// already emits the primary "missing required argument" error, so running this
+	// check would only stack a confusing secondary diagnostic on top of it.
+	if cfg.ProviderName.IsNull() || cfg.ProviderName.IsUnknown() ||
+		cfg.ModelAliases.IsNull() || cfg.ModelAliases.IsUnknown() {
 		return
 	}
 	if cfg.ProviderName.ValueString() == "bedrock" {

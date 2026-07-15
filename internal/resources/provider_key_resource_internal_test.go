@@ -260,6 +260,34 @@ func TestModelAliasesToAPI_NullYieldsNil(t *testing.T) {
 	}
 }
 
+// TestAliasConfigToObjectValue_EmptyDescription guards the "" vs null round-trip
+// on the alias description. When a user configures description = "" the plan is
+// "", and Bifrost echoes it back as "": the projection must keep "" (fall back to
+// the known prior) rather than folding to null, which would be an inconsistent
+// result after apply. With no known prior (import / config omits it), an empty
+// description still folds to null.
+func TestAliasConfigToObjectValue_EmptyDescription(t *testing.T) {
+	ac := schemas.AliasConfig{ModelID: "m", Description: ""}
+
+	// explicit prior "" (user configured description = "") → stays "".
+	obj := aliasConfigToObjectValue(ac, &AliasConfigModel{Description: types.StringValue("")})
+	if d := obj.Attributes()["description"].(types.String); d.IsNull() || d.ValueString() != "" {
+		t.Errorf("empty description with explicit \"\" prior: got %#v, want \"\"", d)
+	}
+
+	// no prior (import / config omits description) → null.
+	obj = aliasConfigToObjectValue(ac, nil)
+	if d := obj.Attributes()["description"].(types.String); !d.IsNull() {
+		t.Errorf("empty description with no prior: got %q, want null", d.ValueString())
+	}
+
+	// a non-empty API description is taken verbatim regardless of prior.
+	obj = aliasConfigToObjectValue(schemas.AliasConfig{ModelID: "m", Description: "hi"}, nil)
+	if d := obj.Attributes()["description"].(types.String); d.ValueString() != "hi" {
+		t.Errorf("non-empty description: got %q, want %q", d.ValueString(), "hi")
+	}
+}
+
 // TestApiAliasesToModel_EmptyYieldsNull ensures empty/nil server aliases project
 // to a typed null map so an Optional+unset attribute round-trips cleanly.
 func TestApiAliasesToModel_EmptyYieldsNull(t *testing.T) {

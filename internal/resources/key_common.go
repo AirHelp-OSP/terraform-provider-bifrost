@@ -365,12 +365,24 @@ func aliasConfigToObjectValue(ac schemas.AliasConfig, prior *AliasConfigModel) t
 			priorOf(func(p *AliasConfigModel) types.String { return p.InferenceProfileARN }))
 	}
 
+	// description round-trips as a plain string; Bifrost echoes "" for an unset
+	// value. Fold "" back to the prior value when one is known (the plan on
+	// Create/Update, state on Read) so an explicit `description = ""` stays "" —
+	// otherwise plan "" would become state null, an inconsistent result after
+	// apply. With no known prior (import / config omits it) "" folds to null.
+	description := emptyStringAsNull(ac.Description)
+	if ac.Description == "" {
+		if priorDesc := priorOf(func(p *AliasConfigModel) types.String { return p.Description }); !priorDesc.IsNull() && !priorDesc.IsUnknown() {
+			description = priorDesc
+		}
+	}
+
 	return types.ObjectValueMust(aliasConfigAttrTypes(), map[string]attr.Value{
 		"model_id":              types.StringValue(ac.ModelID),
 		"inference_profile_arn": inferenceProfileARN,
 		"model_name":            stringPtrToString(ac.ModelName),
 		"model_family":          modelFamilyToString(ac.ModelFamily),
-		"description":           emptyStringAsNull(ac.Description),
+		"description":           description,
 		"region":                region,
 	})
 }
