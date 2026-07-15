@@ -7,14 +7,14 @@ Terraform provider for [Bifrost](https://github.com/maximhq/bifrost) — the AI/
 
 ## Compatibility
 
-This provider targets the Bifrost HTTP transport's management API. Bifrost [v1.5.0](https://github.com/maximhq/bifrost/releases/tag/transports%2Fv1.5.0) introduced dedicated per-key endpoints (`/api/providers/{provider}/keys`) and removed the embedded `keys` array from provider create/update payloads. This provider follows that contract — earlier Bifrost releases are not supported.
+This provider targets the Bifrost HTTP transport's management API and requires **Bifrost [v1.6.0](https://github.com/maximhq/bifrost/releases/tag/transports%2Fv1.6.0)+**. It is built against the `bifrost/core` v1.6.x schemas, whose secret wire format (`SecretVar`, `{"value":…,"type":…}`) is not understood by older servers — a v1.5.x server would misparse credentials sent by this provider. v1.6.0 also introduced the structured alias config that backs the rich object form of `model_aliases` (`inference_profile_arn`, `model_name`, `model_family`, and per-alias `region`).
 
-| Bifrost HTTP transport | Supported |
-|------------------------|:---------:|
-| ≥ 1.5.0                | ✅         |
-| < 1.5.0                | ❌         |
+| Bifrost HTTP transport | Supported | Notes |
+|------------------------|:---------:|-------|
+| ≥ 1.6.0                | ✅         | full feature set incl. rich `model_aliases` |
+| < 1.6.0                | ❌         | incompatible secret wire format; no structured alias config |
 
-Pin Bifrost to v1.5.0+ in your deployment (Docker, Helm, or binary). The e2e suite runs against `maximhq/bifrost:v1.5.0`.
+Pin Bifrost to v1.6.0+ in your deployment (Docker, Helm, or binary). The e2e suite runs against `maximhq/bifrost:v1.6.4`.
 
 ## Resource Coverage
 
