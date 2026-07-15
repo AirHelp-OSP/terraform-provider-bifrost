@@ -3,6 +3,8 @@ package resources
 import (
 	"context"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/maximhq/bifrost/core/schemas"
@@ -72,7 +74,7 @@ func (wildcardNotMixedValidator) ValidateList(ctx context.Context, req validator
 // (envvar.go: `if e.Val == "" && !e.FromEnv { return false }`). Without
 // this fold, an Optional EnvVar field the user never set would round-trip
 // as `null → ""` on every plan.
-func envVarToString(ev *schemas.EnvVar, prior types.String) types.String {
+func envVarToString(ev *schemas.SecretVar, prior types.String) types.String {
 	if ev == nil {
 		return types.StringNull()
 	}
@@ -100,11 +102,11 @@ func emptyStringAsNull(s string) types.String {
 // stringToEnvVar converts a TF state/plan types.String into a *schemas.EnvVar
 // for sending in API requests. Null/unknown become nil so the field is omitted
 // from JSON marshaling (each schema field already uses `omitempty`).
-func stringToEnvVar(s types.String) *schemas.EnvVar {
+func stringToEnvVar(s types.String) *schemas.SecretVar {
 	if s.IsNull() || s.IsUnknown() {
 		return nil
 	}
-	return schemas.NewEnvVar(s.ValueString())
+	return schemas.NewSecretVar(s.ValueString())
 }
 
 // ── BedrockKeyConfig (Bifrost v1.5.0) ─────────────────────────────────────────
@@ -135,7 +137,7 @@ func bedrockKeyConfigToModel(bkc *schemas.BedrockKeyConfig, prior *BedrockKeyCon
 		return get(prior)
 	}
 
-	// AccessKey / SecretKey are value types (EnvVar, not *EnvVar) in v1.5.0.
+	// AccessKey / SecretKey are value types (SecretVar, not *SecretVar).
 	m.AccessKey = envVarToString(&bkc.AccessKey, priorOf(func(p *BedrockKeyConfigModel) types.String { return p.AccessKey }))
 	m.SecretKey = envVarToString(&bkc.SecretKey, priorOf(func(p *BedrockKeyConfigModel) types.String { return p.SecretKey }))
 
@@ -153,10 +155,10 @@ func modelToBedrockKeyConfig(m *BedrockKeyConfigModel) *schemas.BedrockKeyConfig
 	bkc := &schemas.BedrockKeyConfig{}
 
 	if !m.AccessKey.IsNull() && !m.AccessKey.IsUnknown() {
-		bkc.AccessKey = *schemas.NewEnvVar(m.AccessKey.ValueString())
+		bkc.AccessKey = *schemas.NewSecretVar(m.AccessKey.ValueString())
 	}
 	if !m.SecretKey.IsNull() && !m.SecretKey.IsUnknown() {
-		bkc.SecretKey = *schemas.NewEnvVar(m.SecretKey.ValueString())
+		bkc.SecretKey = *schemas.NewSecretVar(m.SecretKey.ValueString())
 	}
 	bkc.SessionToken = stringToEnvVar(m.SessionToken)
 	bkc.Region = stringToEnvVar(m.Region)
@@ -166,4 +168,183 @@ func modelToBedrockKeyConfig(m *BedrockKeyConfigModel) *schemas.BedrockKeyConfig
 	bkc.RoleSessionName = stringToEnvVar(m.RoleSessionName)
 
 	return bkc
+}
+
+// ── Model aliases (Bifrost v1.6.x AliasConfig) ────────────────────────────────
+//
+// Bifrost v1.6.0 replaced the string-valued alias map with a rich AliasConfig
+// (KeyAliases = map[string]AliasConfig). An alias now maps a user-facing model
+// name to a wire model id plus optional routing/pricing metadata and
+// provider-specific overrides — notably Bedrock's inference_profile_arn. The
+// wire format stays backward compatible: an alias carrying only model_id
+// marshals back to a plain string.
+
+// modelFamilyValues enumerates the valid schemas.ModelFamily values, surfaced as
+// the OneOf set for the `model_family` attribute so a typo is caught at plan time
+// rather than by the server (mirrors schemas.ModelFamily.IsValid).
+var modelFamilyValues = []string{
+	string(schemas.ModelFamilyAnthropic),
+	string(schemas.ModelFamilyOpenAI),
+	string(schemas.ModelFamilyMistral),
+	string(schemas.ModelFamilyCohere),
+	string(schemas.ModelFamilyGemini),
+	string(schemas.ModelFamilyGemma),
+	string(schemas.ModelFamilyLlama),
+	string(schemas.ModelFamilyImagen),
+	string(schemas.ModelFamilyVeo),
+	string(schemas.ModelFamilyNova),
+	string(schemas.ModelFamilyTitan),
+}
+
+// AliasConfigModel is the nested-object value of the `model_aliases` map.
+type AliasConfigModel struct {
+	ModelID             types.String `tfsdk:"model_id"`
+	InferenceProfileARN types.String `tfsdk:"inference_profile_arn"`
+	ModelName           types.String `tfsdk:"model_name"`
+	ModelFamily         types.String `tfsdk:"model_family"`
+	Description         types.String `tfsdk:"description"`
+	Region              types.String `tfsdk:"region"`
+}
+
+// aliasConfigAttrTypes is the attribute-type map for a single alias object. It is
+// the single source of truth shared by the schema, the map element type, and
+// every types.ObjectValue construction below.
+func aliasConfigAttrTypes() map[string]attr.Type {
+	return map[string]attr.Type{
+		"model_id":              types.StringType,
+		"inference_profile_arn": types.StringType,
+		"model_name":            types.StringType,
+		"model_family":          types.StringType,
+		"description":           types.StringType,
+		"region":                types.StringType,
+	}
+}
+
+// aliasConfigObjectType is the element type of the `model_aliases` map.
+func aliasConfigObjectType() types.ObjectType {
+	return types.ObjectType{AttrTypes: aliasConfigAttrTypes()}
+}
+
+// modelAliasesToAPI converts the nested `model_aliases` map into
+// schemas.KeyAliases. Region and inference_profile_arn are SecretVars so they
+// support env./vault. references; every other field is plain. Null/unknown
+// optional fields are omitted so an alias with only model_id round-trips to the
+// legacy string wire form.
+func modelAliasesToAPI(ctx context.Context, m types.Map) (schemas.KeyAliases, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	if m.IsNull() || m.IsUnknown() {
+		return nil, diags
+	}
+
+	elems := make(map[string]AliasConfigModel, len(m.Elements()))
+	diags.Append(m.ElementsAs(ctx, &elems, false)...)
+	if diags.HasError() {
+		return nil, diags
+	}
+
+	ka := make(schemas.KeyAliases, len(elems))
+	for name, a := range elems {
+		ac := schemas.AliasConfig{ModelID: a.ModelID.ValueString()}
+
+		if !a.ModelName.IsNull() && !a.ModelName.IsUnknown() {
+			v := a.ModelName.ValueString()
+			ac.ModelName = &v
+		}
+		if !a.ModelFamily.IsNull() && !a.ModelFamily.IsUnknown() {
+			f := schemas.ModelFamily(a.ModelFamily.ValueString())
+			ac.ModelFamily = &f
+		}
+		if !a.Description.IsNull() && !a.Description.IsUnknown() {
+			ac.Description = a.Description.ValueString()
+		}
+		if !a.Region.IsNull() && !a.Region.IsUnknown() {
+			ac.Region = schemas.NewSecretVar(a.Region.ValueString())
+		}
+		if !a.InferenceProfileARN.IsNull() && !a.InferenceProfileARN.IsUnknown() {
+			ac.BedrockAliasCfg = &schemas.BedrockAliasCfg{
+				InferenceProfileARN: schemas.NewSecretVar(a.InferenceProfileARN.ValueString()),
+			}
+		}
+
+		ka[name] = ac
+	}
+	return ka, diags
+}
+
+// apiAliasesToModel projects schemas.KeyAliases into the nested `model_aliases`
+// map. Empty aliases become MapNull so an Optional+unset attribute round-trips
+// cleanly. The SecretVar fields (region, inference_profile_arn) reuse
+// envVarToString so a redacted env./vault. reference falls back to the prior
+// state value rather than being clobbered. prior is the prior `model_aliases`
+// map (may be null), used only to recover redacted secret references.
+func apiAliasesToModel(ctx context.Context, aliases schemas.KeyAliases, prior types.Map) types.Map {
+	objType := aliasConfigObjectType()
+	if len(aliases) == 0 {
+		return types.MapNull(objType)
+	}
+
+	priorAliases := map[string]AliasConfigModel{}
+	if !prior.IsNull() && !prior.IsUnknown() {
+		// Best-effort: on decode failure we simply have no prior to preserve.
+		_ = prior.ElementsAs(ctx, &priorAliases, false)
+	}
+
+	elems := make(map[string]attr.Value, len(aliases))
+	for name, ac := range aliases {
+		var p *AliasConfigModel
+		if pv, ok := priorAliases[name]; ok {
+			pv := pv
+			p = &pv
+		}
+		elems[name] = aliasConfigToObjectValue(ac, p)
+	}
+	return types.MapValueMust(objType, elems)
+}
+
+// aliasConfigToObjectValue projects a single AliasConfig into a types.Object.
+// prior (may be nil) supplies fallback values for redacted secret references.
+func aliasConfigToObjectValue(ac schemas.AliasConfig, prior *AliasConfigModel) types.Object {
+	priorOf := func(get func(*AliasConfigModel) types.String) types.String {
+		if prior == nil {
+			return types.StringNull()
+		}
+		return get(prior)
+	}
+
+	region := types.StringNull()
+	if ac.Region != nil {
+		region = envVarToString(ac.Region, priorOf(func(p *AliasConfigModel) types.String { return p.Region }))
+	}
+
+	inferenceProfileARN := types.StringNull()
+	if ac.BedrockAliasCfg != nil {
+		// InferenceProfileARN is promoted from the embedded *BedrockAliasCfg.
+		inferenceProfileARN = envVarToString(ac.InferenceProfileARN,
+			priorOf(func(p *AliasConfigModel) types.String { return p.InferenceProfileARN }))
+	}
+
+	return types.ObjectValueMust(aliasConfigAttrTypes(), map[string]attr.Value{
+		"model_id":              types.StringValue(ac.ModelID),
+		"inference_profile_arn": inferenceProfileARN,
+		"model_name":            stringPtrToString(ac.ModelName),
+		"model_family":          modelFamilyToString(ac.ModelFamily),
+		"description":           emptyStringAsNull(ac.Description),
+		"region":                region,
+	})
+}
+
+// stringPtrToString converts an optional *string into a types.String.
+func stringPtrToString(p *string) types.String {
+	if p == nil {
+		return types.StringNull()
+	}
+	return types.StringValue(*p)
+}
+
+// modelFamilyToString converts an optional *schemas.ModelFamily into a types.String.
+func modelFamilyToString(f *schemas.ModelFamily) types.String {
+	if f == nil {
+		return types.StringNull()
+	}
+	return types.StringValue(string(*f))
 }

@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	bifrostImage    = "maximhq/bifrost:v1.5.0"
+	bifrostImage    = "maximhq/bifrost:v1.6.4"
 	bifrostPort     = "8080/tcp"
 	bifrostUsername = "admin"
 	bifrostPassword = "testpassword123"

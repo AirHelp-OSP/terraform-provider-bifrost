@@ -16,9 +16,25 @@ resource "bifrost_provider_key" "bedrock_primary" {
     region     = "us-east-1"
   }
 
-  # Map a user-facing model name to a Bedrock inference profile.
+  # Expose AWS Bedrock inference profiles under friendly, stable model names.
+  # Each alias is a rich object (Bifrost v1.6.0+): `model_id` is required, the
+  # rest are optional.
   model_aliases = {
-    "claude-3-opus" = "us.anthropic.claude-3-opus-20240229-v1:0"
+    # Cross-region *system* inference profile: address it by its profile id.
+    "claude-sonnet" = {
+      model_id = "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+    }
+
+    # *Application* inference profile: keep the base model as `model_id` and point
+    # at the profile ARN. `model_name`/`model_family` drive pricing/logging and
+    # provider routing when the id is opaque.
+    "claude-sonnet-app" = {
+      model_id              = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+      inference_profile_arn = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-profile"
+      model_name            = "claude-3-5-sonnet-20241022"
+      model_family          = "anthropic"
+      description           = "Claude 3.5 Sonnet via our cross-region application profile"
+    }
   }
 }
 

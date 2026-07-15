@@ -9,12 +9,15 @@ Terraform provider for [Bifrost](https://github.com/maximhq/bifrost) — the AI/
 
 This provider targets the Bifrost HTTP transport's management API. Bifrost [v1.5.0](https://github.com/maximhq/bifrost/releases/tag/transports%2Fv1.5.0) introduced dedicated per-key endpoints (`/api/providers/{provider}/keys`) and removed the embedded `keys` array from provider create/update payloads. This provider follows that contract — earlier Bifrost releases are not supported.
 
-| Bifrost HTTP transport | Supported |
-|------------------------|:---------:|
-| ≥ 1.5.0                | ✅         |
-| < 1.5.0                | ❌         |
+Rich **model aliases** (the object form of `model_aliases` with `inference_profile_arn`, `model_name`, `model_family`, and per-alias `region`) require Bifrost [v1.6.0](https://github.com/maximhq/bifrost/releases/tag/transports%2Fv1.6.0)+, which introduced the structured alias config. Against v1.5.x servers only the simple form (an alias mapping to a bare model id) is honored.
 
-Pin Bifrost to v1.5.0+ in your deployment (Docker, Helm, or binary). The e2e suite runs against `maximhq/bifrost:v1.5.0`.
+| Bifrost HTTP transport | Supported | Notes |
+|------------------------|:---------:|-------|
+| ≥ 1.6.0                | ✅         | full feature set incl. rich `model_aliases` |
+| 1.5.x                  | ✅         | simple (bare-model-id) `model_aliases` only |
+| < 1.5.0                | ❌         | no per-key endpoints |
+
+Pin Bifrost to v1.6.0+ in your deployment (Docker, Helm, or binary) to use rich model aliases. The e2e suite runs against `maximhq/bifrost:v1.6.4`.
 
 ## Resource Coverage
 

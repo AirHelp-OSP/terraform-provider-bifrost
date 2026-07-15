@@ -31,9 +31,25 @@ resource "bifrost_provider_key" "bedrock_primary" {
     region     = "us-east-1"
   }
 
-  # Map a user-facing model name to a Bedrock inference profile.
+  # Expose AWS Bedrock inference profiles under friendly, stable model names.
+  # Each alias is a rich object (Bifrost v1.6.0+): `model_id` is required, the
+  # rest are optional.
   model_aliases = {
-    "claude-3-opus" = "us.anthropic.claude-3-opus-20240229-v1:0"
+    # Cross-region *system* inference profile: address it by its profile id.
+    "claude-sonnet" = {
+      model_id = "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+    }
+
+    # *Application* inference profile: keep the base model as `model_id` and point
+    # at the profile ARN. `model_name`/`model_family` drive pricing/logging and
+    # provider routing when the id is opaque.
+    "claude-sonnet-app" = {
+      model_id              = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+      inference_profile_arn = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-profile"
+      model_name            = "claude-3-5-sonnet-20241022"
+      model_family          = "anthropic"
+      description           = "Claude 3.5 Sonnet via our cross-region application profile"
+    }
   }
 }
 
@@ -71,7 +87,7 @@ resource "bifrost_provider_key" "openai_secondary" {
 
 - `bedrock_key_config` (Attributes) AWS Bedrock-specific key configuration. Bifrost redacts sensitive fields on read; prior state values are preserved on every Read. (see [below for nested schema](#nestedatt--bedrock_key_config))
 - `enabled` (Boolean) Whether the key is active. Defaults to `true`.
-- `model_aliases` (Map of String) Mapping of user-facing model names to provider-specific identifiers (e.g. Bedrock inference profile ARNs, Azure deployment names, fine-tuned model IDs). Replaces the Bedrock-only `deployments` map from Bifrost v1.4.x.
+- `model_aliases` (Attributes Map) Maps user-facing model names to a rich alias configuration (Bifrost v1.6.0+). Each alias resolves a friendly name to a provider model plus optional routing/pricing metadata — ideal for exposing AWS Bedrock inference profiles under stable names. For a cross-region *system* inference profile set `model_id` to the profile id (e.g. `us.anthropic.claude-3-5-sonnet-20241022-v2:0`); for an *application* inference profile set `model_id` to the base model and `inference_profile_arn` to the profile ARN. Replaces the plain string map from provider schema v1 (auto-migrated). (see [below for nested schema](#nestedatt--model_aliases))
 - `models` (List of String) Models this key may access (whitelist). Use `["*"]` to allow all (the default). **Bifrost v1.5.0 changed the empty-list semantic**: `[]` now means _deny all_, not _allow all_. Provider validates that `"*"` is not mixed with specific values.
 - `value` (String, Sensitive, [Write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments)) The API key value, supplied as a [write-only argument](https://developer.hashicorp.com/terraform/language/resources/ephemeral/write-only): it is sent to Bifrost but **never stored in Terraform state**. Changing it updates the computed `value_sha256`, which is what drives the diff. Supports `env.VAR_NAME` references. Optional because some providers (notably AWS Bedrock) ignore the field — credentials live in the provider-specific block (`bedrock_key_config`) instead. **Requires Terraform >= 1.11 / OpenTofu >= 1.10.**
 - `weight` (Number) Load-balancing weight relative to other keys on this provider. Defaults to `1.0`.
@@ -95,6 +111,22 @@ Optional:
 - `role_session_name` (String) Session name for STS `AssumeRole`.
 - `secret_key` (String, Sensitive) AWS secret access key.
 - `session_token` (String, Sensitive) AWS session token for temporary credentials.
+
+
+<a id="nestedatt--model_aliases"></a>
+### Nested Schema for `model_aliases`
+
+Required:
+
+- `model_id` (String) Wire model identifier forwarded to the provider — a model id, a cross-region inference-profile id, a deployment name, or a fine-tuned model id.
+
+Optional:
+
+- `description` (String) Free-form description of the alias (surfaced in the Bifrost UI).
+- `inference_profile_arn` (String) AWS Bedrock cross-region/application **inference profile ARN** to invoke instead of the raw model id. Bedrock-only. Supports `env.VAR_NAME` references.
+- `model_family` (String) Forces the provider routing family (request shape, response parsing, auth). One of: `anthropic`, `openai`, `mistral`, `cohere`, `gemini`, `gemma`, `llama`, `imagen`, `veo`, `nova`, `titan`.
+- `model_name` (String) Canonical model name used for pricing and logging when `model_id` is opaque (e.g. a deployment name or ARN).
+- `region` (String) Per-alias region override (Bedrock/Vertex). Supports `env.VAR_NAME` references.
 
 ## Import
 

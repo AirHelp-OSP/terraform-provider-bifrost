@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -30,6 +31,7 @@ import (
 var _ resource.Resource = &ProviderKeyResource{}
 var _ resource.ResourceWithImportState = &ProviderKeyResource{}
 var _ resource.ResourceWithUpgradeState = &ProviderKeyResource{}
+var _ resource.ResourceWithConfigValidators = &ProviderKeyResource{}
 
 // NewProviderKeyResource returns a new ProviderKeyResource.
 func NewProviderKeyResource() resource.Resource {
@@ -70,12 +72,27 @@ func (r *ProviderKeyResource) Metadata(_ context.Context, req resource.MetadataR
 
 func (r *ProviderKeyResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	attrs := providerKeyBaseAttributes()
+	attrs["value"] = valueWriteOnlyAttribute()
+	attrs["value_sha256"] = valueSHA256Attribute()
+	attrs["model_aliases"] = modelAliasesNestedAttribute()
 
-	// `value` is a write-only argument: Terraform sends it to Bifrost but never
-	// persists it to state. value_sha256 is the stored digest that drives change
-	// detection in its place. Write-only attributes require Terraform >= 1.11
-	// (OpenTofu >= 1.10).
-	attrs["value"] = schema.StringAttribute{
+	resp.Schema = schema.Schema{
+		Version: 2,
+		MarkdownDescription: "Manages a single API key on a [Bifrost provider](https://github.com/maximhq/bifrost). " +
+			"Backed by Bifrost v1.5.0's per-key endpoints (`/api/providers/{provider}/keys`). " +
+			"Reference the parent provider via `provider_name = bifrost_provider.X.provider_name`. " +
+			"The secret is supplied via the write-only `value` argument and is never stored in state.",
+		Description: "Manages a single API key on a Bifrost provider (v1.5.0+).",
+		Attributes:  attrs,
+	}
+}
+
+// valueWriteOnlyAttribute is the write-only `value` argument shared by schema
+// versions >= 1. Terraform sends it to Bifrost but never persists it to state;
+// value_sha256 is the stored digest that drives change detection in its place.
+// Write-only attributes require Terraform >= 1.11 (OpenTofu >= 1.10).
+func valueWriteOnlyAttribute() schema.StringAttribute {
+	return schema.StringAttribute{
 		MarkdownDescription: "The API key value, supplied as a [write-only argument]" +
 			"(https://developer.hashicorp.com/terraform/language/resources/ephemeral/write-only): " +
 			"it is sent to Bifrost but **never stored in Terraform state**. Changing it updates the " +
@@ -88,7 +105,12 @@ func (r *ProviderKeyResource) Schema(_ context.Context, _ resource.SchemaRequest
 		Sensitive:   true,
 		WriteOnly:   true,
 	}
-	attrs["value_sha256"] = schema.StringAttribute{
+}
+
+// valueSHA256Attribute is the computed digest of `value` shared by schema
+// versions >= 1.
+func valueSHA256Attribute() schema.StringAttribute {
+	return schema.StringAttribute{
 		MarkdownDescription: "SHA-256 hex digest of `value`, stored in place of the plaintext secret. " +
 			"Terraform compares this digest across plans to detect when the key value changes (the secret " +
 			"itself is never written to state). Null when no `value` is set.",
@@ -98,23 +120,85 @@ func (r *ProviderKeyResource) Schema(_ context.Context, _ resource.SchemaRequest
 			valueSHA256Hash(),
 		},
 	}
+}
 
-	resp.Schema = schema.Schema{
-		Version: 1,
-		MarkdownDescription: "Manages a single API key on a [Bifrost provider](https://github.com/maximhq/bifrost). " +
-			"Backed by Bifrost v1.5.0's per-key endpoints (`/api/providers/{provider}/keys`). " +
-			"Reference the parent provider via `provider_name = bifrost_provider.X.provider_name`. " +
-			"The secret is supplied via the write-only `value` argument and is never stored in state.",
-		Description: "Manages a single API key on a Bifrost provider (v1.5.0+).",
-		Attributes:  attrs,
+// modelAliasesNestedAttribute is the v2 `model_aliases` attribute: a map of
+// user-facing model names to a rich alias object (Bifrost v1.6.x AliasConfig).
+// It supersedes the v1 string map (see modelAliasesStringAttribute), which is
+// migrated by the v1 -> v2 state upgrade.
+func modelAliasesNestedAttribute() schema.MapNestedAttribute {
+	return schema.MapNestedAttribute{
+		MarkdownDescription: "Maps user-facing model names to a rich alias configuration (Bifrost " +
+			"v1.6.0+). Each alias resolves a friendly name to a provider model plus optional " +
+			"routing/pricing metadata — ideal for exposing AWS Bedrock inference profiles under " +
+			"stable names. For a cross-region *system* inference profile set `model_id` to the " +
+			"profile id (e.g. `us.anthropic.claude-3-5-sonnet-20241022-v2:0`); for an *application* " +
+			"inference profile set `model_id` to the base model and `inference_profile_arn` to the " +
+			"profile ARN. Replaces the plain string map from provider schema v1 (auto-migrated).",
+		Description: "User-facing model name -> rich alias configuration (model_id + optional metadata).",
+		Optional:    true,
+		NestedObject: schema.NestedAttributeObject{
+			Attributes: map[string]schema.Attribute{
+				"model_id": schema.StringAttribute{
+					MarkdownDescription: "Wire model identifier forwarded to the provider — a model id, a " +
+						"cross-region inference-profile id, a deployment name, or a fine-tuned model id.",
+					Description: "Wire model identifier forwarded to the provider.",
+					Required:    true,
+				},
+				"inference_profile_arn": schema.StringAttribute{
+					MarkdownDescription: "AWS Bedrock cross-region/application **inference profile ARN** to " +
+						"invoke instead of the raw model id. Bedrock-only. Supports `env.VAR_NAME` references.",
+					Description: "AWS Bedrock inference profile ARN (Bedrock-only).",
+					Optional:    true,
+				},
+				"model_name": schema.StringAttribute{
+					MarkdownDescription: "Canonical model name used for pricing and logging when `model_id` " +
+						"is opaque (e.g. a deployment name or ARN).",
+					Description: "Canonical model name for pricing/logging.",
+					Optional:    true,
+				},
+				"model_family": schema.StringAttribute{
+					MarkdownDescription: "Forces the provider routing family (request shape, response " +
+						"parsing, auth). One of: `" + strings.Join(modelFamilyValues, "`, `") + "`.",
+					Description: "Routing family override.",
+					Optional:    true,
+					Validators: []validator.String{
+						stringvalidator.OneOf(modelFamilyValues...),
+					},
+				},
+				"description": schema.StringAttribute{
+					MarkdownDescription: "Free-form description of the alias (surfaced in the Bifrost UI).",
+					Description:         "Free-form description of the alias.",
+					Optional:            true,
+				},
+				"region": schema.StringAttribute{
+					MarkdownDescription: "Per-alias region override (Bedrock/Vertex). Supports `env.VAR_NAME` references.",
+					Description:         "Per-alias region override.",
+					Optional:            true,
+				},
+			},
+		},
+	}
+}
+
+// modelAliasesStringAttribute is the legacy (schema v0/v1) `model_aliases`
+// attribute: a plain string map. Retained so prior-version state decodes during
+// the state upgrade.
+func modelAliasesStringAttribute() schema.MapAttribute {
+	return schema.MapAttribute{
+		MarkdownDescription: "Mapping of user-facing model names to provider-specific identifiers.",
+		Description:         "User-facing model name -> provider-specific identifier.",
+		Optional:            true,
+		ElementType:         types.StringType,
 	}
 }
 
 // providerKeyBaseAttributes returns the attributes common to every schema
-// version — everything except the secret value, which changed shape in v1
-// (plaintext `value` → write-only `value_wo` + computed `value_sha256`).
-// A fresh map is returned on each call so callers can add version-specific
-// attributes without mutating a shared instance.
+// version — everything except the two that changed shape across versions and
+// are added per-version by the caller: the secret `value` (v0 plaintext ->
+// v1 write-only + `value_sha256`) and `model_aliases` (v0/v1 string map ->
+// v2 nested object). A fresh map is returned on each call so callers can add
+// version-specific attributes without mutating a shared instance.
 func providerKeyBaseAttributes() map[string]schema.Attribute {
 	allowAllModels, _ := types.ListValue(types.StringType, []attr.Value{types.StringValue("*")})
 
@@ -170,14 +254,6 @@ func providerKeyBaseAttributes() map[string]schema.Attribute {
 				listvalidator.UniqueValues(),
 				WildcardNotMixed(),
 			},
-		},
-		"model_aliases": schema.MapAttribute{
-			MarkdownDescription: "Mapping of user-facing model names to provider-specific identifiers " +
-				"(e.g. Bedrock inference profile ARNs, Azure deployment names, fine-tuned model IDs). " +
-				"Replaces the Bedrock-only `deployments` map from Bifrost v1.4.x.",
-			Description: "User-facing model name → provider-specific identifier.",
-			Optional:    true,
-			ElementType: types.StringType,
 		},
 		"weight": schema.Float64Attribute{
 			MarkdownDescription: "Load-balancing weight relative to other keys on this provider. Defaults to `1.0`.",
@@ -244,6 +320,62 @@ func providerKeyBaseAttributes() map[string]schema.Attribute {
 				},
 			},
 		},
+	}
+}
+
+// ── Config validators ───────────────────────────────────────────────────────
+
+func (r *ProviderKeyResource) ConfigValidators(_ context.Context) []resource.ConfigValidator {
+	return []resource.ConfigValidator{
+		inferenceProfileARNRequiresBedrock{},
+	}
+}
+
+// inferenceProfileARNRequiresBedrock rejects an alias that sets
+// inference_profile_arn on a non-bedrock key. inference_profile_arn is an AWS
+// Bedrock-only override; the upstream schemas.KeyAliases.Validate would reject
+// it at apply time, so surfacing it at plan time saves an API round-trip and
+// gives a precise, per-alias diagnostic.
+type inferenceProfileARNRequiresBedrock struct{}
+
+func (inferenceProfileARNRequiresBedrock) Description(_ context.Context) string {
+	return "inference_profile_arn is only valid on aliases of a bedrock provider key"
+}
+
+func (v inferenceProfileARNRequiresBedrock) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (inferenceProfileARNRequiresBedrock) ValidateResource(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var cfg ProviderKeyResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &cfg)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// Nothing to check until both the provider and the aliases are known.
+	if cfg.ProviderName.IsUnknown() || cfg.ModelAliases.IsNull() || cfg.ModelAliases.IsUnknown() {
+		return
+	}
+	if cfg.ProviderName.ValueString() == "bedrock" {
+		return
+	}
+
+	aliases := map[string]AliasConfigModel{}
+	resp.Diagnostics.Append(cfg.ModelAliases.ElementsAs(ctx, &aliases, false)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	for name, a := range aliases {
+		if !a.InferenceProfileARN.IsNull() && !a.InferenceProfileARN.IsUnknown() {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("model_aliases").AtMapKey(name).AtName("inference_profile_arn"),
+				"inference_profile_arn requires the bedrock provider",
+				fmt.Sprintf("Alias %q sets inference_profile_arn, an AWS Bedrock-only override, but "+
+					"provider_name is %q. Remove inference_profile_arn or set provider_name = \"bedrock\".",
+					name, cfg.ProviderName.ValueString()),
+			)
+		}
 	}
 }
 
@@ -342,7 +474,7 @@ func (r *ProviderKeyResource) Create(ctx context.Context, req resource.CreateReq
 		return
 	}
 
-	newState := apiKeyToProviderKeyModel(apiResp, &plan, providerName)
+	newState := apiKeyToProviderKeyModel(ctx, apiResp, &plan, providerName)
 	newState.ValueSHA256 = sha256OfValue(config.Value)
 	tflog.Debug(ctx, "created Bifrost provider key", map[string]any{
 		"id":     newState.ID.ValueString(),
@@ -379,7 +511,7 @@ func (r *ProviderKeyResource) Read(ctx context.Context, req resource.ReadRequest
 
 	// Read has no config, so the secret digest cannot be recomputed; carry the
 	// prior value_sha256 forward (apiKeyToProviderKeyModel preserves it).
-	newState := apiKeyToProviderKeyModel(apiResp, &state, providerName)
+	newState := apiKeyToProviderKeyModel(ctx, apiResp, &state, providerName)
 	resp.Diagnostics.Append(resp.State.Set(ctx, newState)...)
 }
 
@@ -411,7 +543,7 @@ func (r *ProviderKeyResource) Update(ctx context.Context, req resource.UpdateReq
 		return
 	}
 
-	newState := apiKeyToProviderKeyModel(apiResp, &plan, providerName)
+	newState := apiKeyToProviderKeyModel(ctx, apiResp, &plan, providerName)
 	newState.ValueSHA256 = sha256OfValue(config.Value)
 	resp.Diagnostics.Append(resp.State.Set(ctx, newState)...)
 }
@@ -518,7 +650,7 @@ type providerKeyResourceModelV0 struct {
 
 // providerKeySchemaV0 reconstructs the v0 schema so the framework can decode
 // prior state during the upgrade. In v0 `value` was a regular (stored)
-// attribute; v1 makes it write-only and adds `value_sha256`.
+// attribute and `model_aliases` was a plain string map.
 func providerKeySchemaV0() *schema.Schema {
 	attrs := providerKeyBaseAttributes()
 	attrs["value"] = schema.StringAttribute{
@@ -526,46 +658,150 @@ func providerKeySchemaV0() *schema.Schema {
 		Optional:    true,
 		Sensitive:   true,
 	}
+	attrs["model_aliases"] = modelAliasesStringAttribute()
 	return &schema.Schema{Version: 0, Attributes: attrs}
 }
 
+// providerKeyResourceModelV1 mirrors the v1 state shape: a write-only `value`
+// (never stored) with a computed `value_sha256` digest, and `model_aliases`
+// still a plain string map (v2 replaced it with a nested object).
+type providerKeyResourceModelV1 struct {
+	ID               types.String           `tfsdk:"id"`
+	ProviderName     types.String           `tfsdk:"provider_name"`
+	Name             types.String           `tfsdk:"name"`
+	KeyID            types.String           `tfsdk:"key_id"`
+	Value            types.String           `tfsdk:"value"`
+	ValueSHA256      types.String           `tfsdk:"value_sha256"`
+	Models           types.List             `tfsdk:"models"`
+	ModelAliases     types.Map              `tfsdk:"model_aliases"`
+	Weight           types.Float64          `tfsdk:"weight"`
+	Enabled          types.Bool             `tfsdk:"enabled"`
+	BedrockKeyConfig *BedrockKeyConfigModel `tfsdk:"bedrock_key_config"`
+}
+
+// providerKeySchemaV1 reconstructs the v1 schema for decoding prior state during
+// the v1 -> v2 upgrade.
+func providerKeySchemaV1() *schema.Schema {
+	attrs := providerKeyBaseAttributes()
+	attrs["value"] = valueWriteOnlyAttribute()
+	attrs["value_sha256"] = valueSHA256Attribute()
+	attrs["model_aliases"] = modelAliasesStringAttribute()
+	return &schema.Schema{Version: 1, Attributes: attrs}
+}
+
+// UpgradeState upgrades prior state directly to the current schema version. The
+// framework runs the single upgrader matching the stored version (no chaining),
+// so each upgrader must produce the current (v2) model.
 func (r *ProviderKeyResource) UpgradeState(_ context.Context) map[int64]resource.StateUpgrader {
 	return map[int64]resource.StateUpgrader{
-		// v0 → v1: drop the plaintext `value` from state and replace it with the
-		// SHA-256 digest in `value_sha256`. The secret survives only as a hash;
-		// `value` is now write-only, so it stays null in state.
+		// v0 -> v2: replace the plaintext `value` with its SHA-256 digest AND
+		// migrate the string `model_aliases` map to the nested-object form.
 		0: {
 			PriorSchema:   providerKeySchemaV0(),
-			StateUpgrader: upgradeProviderKeyStateV0toV1,
+			StateUpgrader: upgradeProviderKeyStateV0,
+		},
+		// v1 -> v2: migrate the string `model_aliases` map to the nested-object
+		// form (the secret is already stored as a digest).
+		1: {
+			PriorSchema:   providerKeySchemaV1(),
+			StateUpgrader: upgradeProviderKeyStateV1,
 		},
 	}
 }
 
-func upgradeProviderKeyStateV0toV1(ctx context.Context, req resource.UpgradeStateRequest, resp *resource.UpgradeStateResponse) {
+func upgradeProviderKeyStateV0(ctx context.Context, req resource.UpgradeStateRequest, resp *resource.UpgradeStateResponse) {
 	var old providerKeyResourceModelV0
 	resp.Diagnostics.Append(req.State.Get(ctx, &old)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	resp.Diagnostics.Append(resp.State.Set(ctx, upgradeProviderKeyModelV0toV1(old))...)
+	upgraded, diags := upgradeProviderKeyModelV0toV2(ctx, old)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	resp.Diagnostics.Append(resp.State.Set(ctx, upgraded)...)
 }
 
-// upgradeProviderKeyModelV0toV1 carries every field forward unchanged except
-// the secret: the plaintext `value` becomes the `value_sha256` digest, and the
-// now write-only `value` is left null (write-only values are never persisted).
-func upgradeProviderKeyModelV0toV1(old providerKeyResourceModelV0) ProviderKeyResourceModel {
+func upgradeProviderKeyStateV1(ctx context.Context, req resource.UpgradeStateRequest, resp *resource.UpgradeStateResponse) {
+	var old providerKeyResourceModelV1
+	resp.Diagnostics.Append(req.State.Get(ctx, &old)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	upgraded, diags := upgradeProviderKeyModelV1toV2(ctx, old)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	resp.Diagnostics.Append(resp.State.Set(ctx, upgraded)...)
+}
+
+// upgradeProviderKeyModelV0toV2 carries v0 state to the current schema: the
+// plaintext `value` becomes the `value_sha256` digest (and `value` stays null —
+// it is now write-only), and the string `model_aliases` map becomes the
+// nested-object form.
+func upgradeProviderKeyModelV0toV2(ctx context.Context, old providerKeyResourceModelV0) (ProviderKeyResourceModel, diag.Diagnostics) {
+	aliases, diags := migrateStringAliasesToObject(ctx, old.ModelAliases)
 	return ProviderKeyResourceModel{
 		ID:               old.ID,
 		ProviderName:     old.ProviderName,
 		Name:             old.Name,
 		KeyID:            old.KeyID,
 		Models:           old.Models,
-		ModelAliases:     old.ModelAliases,
+		ModelAliases:     aliases,
 		Weight:           old.Weight,
 		Enabled:          old.Enabled,
 		BedrockKeyConfig: old.BedrockKeyConfig,
 		ValueSHA256:      sha256OfValue(old.Value),
+	}, diags
+}
+
+// upgradeProviderKeyModelV1toV2 migrates the string `model_aliases` map to the
+// nested-object form; every other field carries over unchanged.
+func upgradeProviderKeyModelV1toV2(ctx context.Context, old providerKeyResourceModelV1) (ProviderKeyResourceModel, diag.Diagnostics) {
+	aliases, diags := migrateStringAliasesToObject(ctx, old.ModelAliases)
+	return ProviderKeyResourceModel{
+		ID:               old.ID,
+		ProviderName:     old.ProviderName,
+		Name:             old.Name,
+		KeyID:            old.KeyID,
+		Models:           old.Models,
+		ModelAliases:     aliases,
+		Weight:           old.Weight,
+		Enabled:          old.Enabled,
+		BedrockKeyConfig: old.BedrockKeyConfig,
+		ValueSHA256:      old.ValueSHA256,
+	}, diags
+}
+
+// migrateStringAliasesToObject converts a v0/v1 string alias map
+// ({name = model_id}) into the v2 nested-object form ({name = {model_id = ...}}),
+// leaving all other alias fields null. A null/unknown/empty map upgrades to a
+// typed null so an unset attribute stays unset.
+func migrateStringAliasesToObject(ctx context.Context, old types.Map) (types.Map, diag.Diagnostics) {
+	var diags diag.Diagnostics
+	objType := aliasConfigObjectType()
+	if old.IsNull() || old.IsUnknown() {
+		return types.MapNull(objType), diags
 	}
+	oldElems := map[string]string{}
+	diags.Append(old.ElementsAs(ctx, &oldElems, false)...)
+	if diags.HasError() || len(oldElems) == 0 {
+		return types.MapNull(objType), diags
+	}
+	newElems := make(map[string]attr.Value, len(oldElems))
+	for name, id := range oldElems {
+		newElems[name] = types.ObjectValueMust(aliasConfigAttrTypes(), map[string]attr.Value{
+			"model_id":              types.StringValue(id),
+			"inference_profile_arn": types.StringNull(),
+			"model_name":            types.StringNull(),
+			"model_family":          types.StringNull(),
+			"description":           types.StringNull(),
+			"region":                types.StringNull(),
+		})
+	}
+	return types.MapValueMust(objType, newElems), diags
 }
 
 // ── Conversion ───────────────────────────────────────────────────────────────
@@ -588,7 +824,7 @@ func sha256OfValue(v types.String) types.String {
 //
 // Value handling matrix:
 //   - known plaintext → wrap and send (regular path).
-//   - null            → empty EnvVar; the field is Optional because providers
+//   - null            → empty SecretVar; the field is Optional because providers
 //     like AWS Bedrock authenticate via the provider-specific block instead.
 //   - unknown         → diag error: the secret depends on a not-yet-created
 //     resource. There is no prior plaintext to fall back on (it is never
@@ -613,10 +849,10 @@ func providerKeyModelToAPI(ctx context.Context, m *ProviderKeyResourceModel, val
 		)
 		return k, diags
 	case value.IsNull():
-		// Leave k.Value as the zero EnvVar — Bifrost stores it as empty and
+		// Leave k.Value as the zero SecretVar — Bifrost stores it as empty and
 		// providers like Bedrock ignore the field entirely.
 	default:
-		k.Value = *schemas.NewEnvVar(value.ValueString())
+		k.Value = *schemas.NewSecretVar(value.ValueString())
 	}
 
 	if !m.Models.IsNull() && !m.Models.IsUnknown() {
@@ -626,12 +862,9 @@ func providerKeyModelToAPI(ctx context.Context, m *ProviderKeyResourceModel, val
 		k.Models = schemas.WhiteList(models)
 	}
 
-	if !m.ModelAliases.IsNull() && !m.ModelAliases.IsUnknown() {
-		aliases := make(map[string]string)
-		d := m.ModelAliases.ElementsAs(ctx, &aliases, false)
-		diags.Append(d...)
-		k.Aliases = schemas.KeyAliases(aliases)
-	}
+	aliases, aliasDiags := modelAliasesToAPI(ctx, m.ModelAliases)
+	diags.Append(aliasDiags...)
+	k.Aliases = aliases
 
 	if !m.Enabled.IsNull() && !m.Enabled.IsUnknown() {
 		v := m.Enabled.ValueBool()
@@ -650,7 +883,7 @@ func providerKeyModelToAPI(ctx context.Context, m *ProviderKeyResourceModel, val
 // a Terraform-side digest the API never returns, so it is carried over from
 // prior state here; Create/Update overwrite it with the digest of the secret
 // they just sent.
-func apiKeyToProviderKeyModel(apiKey *schemas.Key, prior *ProviderKeyResourceModel, providerName string) *ProviderKeyResourceModel {
+func apiKeyToProviderKeyModel(ctx context.Context, apiKey *schemas.Key, prior *ProviderKeyResourceModel, providerName string) *ProviderKeyResourceModel {
 	m := &ProviderKeyResourceModel{
 		ID:           types.StringValue(providerName + ":" + apiKey.Name),
 		ProviderName: types.StringValue(providerName),
@@ -680,15 +913,13 @@ func apiKeyToProviderKeyModel(apiKey *schemas.Key, prior *ProviderKeyResourceMod
 	}
 
 	// ModelAliases: empty aliases stays null so Optional+unset round-trips cleanly.
-	if len(apiKey.Aliases) > 0 {
-		elems := make(map[string]attr.Value, len(apiKey.Aliases))
-		for k, v := range apiKey.Aliases {
-			elems[k] = types.StringValue(v)
-		}
-		m.ModelAliases = types.MapValueMust(types.StringType, elems)
+	var priorAliases types.Map
+	if prior != nil {
+		priorAliases = prior.ModelAliases
 	} else {
-		m.ModelAliases = types.MapNull(types.StringType)
+		priorAliases = types.MapNull(aliasConfigObjectType())
 	}
+	m.ModelAliases = apiAliasesToModel(ctx, apiKey.Aliases, priorAliases)
 
 	if apiKey.Enabled != nil {
 		m.Enabled = types.BoolValue(*apiKey.Enabled)
