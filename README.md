@@ -7,14 +7,15 @@ Terraform provider for [Bifrost](https://github.com/maximhq/bifrost) — the AI/
 
 ## Compatibility
 
-This provider targets the Bifrost HTTP transport's management API and requires **Bifrost [v1.6.0](https://github.com/maximhq/bifrost/releases/tag/transports%2Fv1.6.0)+**. It is built against the `bifrost/core` v1.6.x schemas, whose secret wire format (`SecretVar`, `{"value":…,"type":…}`) is not understood by older servers — a v1.5.x server would misparse credentials sent by this provider. v1.6.0 also introduced the structured alias config that backs the rich object form of `model_aliases` (`inference_profile_arn`, `model_name`, `model_family`, and per-alias `region`).
+This provider targets the Bifrost HTTP transport's management API and is built and tested against **Bifrost [v2.3.0](https://github.com/maximhq/bifrost/releases/tag/transports%2Fv2.3.0)** (`bifrost/core` v1.12.0). Bifrost v2.x applies provider and key updates as patches — an omitted field keeps its stored value — so this provider sends an explicit `null` to clear a removed block. v2.x also added the Cloudflare Workers AI provider, configured per key via `cloudflare_key_config`.
 
 | Bifrost HTTP transport | Supported | Notes |
 |------------------------|:---------:|-------|
-| ≥ 1.6.0                | ✅         | full feature set incl. rich `model_aliases` |
+| ≥ 2.3.0                | ✅         | full feature set incl. `cloudflare_key_config` |
+| 1.6.x                  | ⚠️         | untested; no Cloudflare provider |
 | < 1.6.0                | ❌         | incompatible secret wire format; no structured alias config |
 
-Pin Bifrost to v1.6.0+ in your deployment (Docker, Helm, or binary). The e2e suite runs against `maximhq/bifrost:v1.6.4`.
+Bifrost v2.x locks the management API until an admin account exists. Seed it with `governance.auth_config` in `config.json` (or the `BIFROST_SETUP_TOKEN` setup flow) and pass those credentials as `username`/`password`. Admin passwords must be 12+ characters with upper- and lower-case letters, a digit, and a special character. The e2e suite runs against `maximhq/bifrost:v2.3.0`.
 
 ## Resource Coverage
 

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,11 +15,16 @@ import (
 )
 
 const (
-	bifrostImage    = "maximhq/bifrost:v1.6.4"
+	bifrostImage    = "maximhq/bifrost:v2.3.0"
 	bifrostPort     = "8080/tcp"
 	bifrostUsername = "admin"
-	bifrostPassword = "testpassword123"
+	bifrostPassword = "TestPassword123!"
 )
+
+var bifrostConfig = fmt.Sprintf(`{
+  "config_store": {"enabled": true, "type": "sqlite", "config": {"path": "./config.db"}},
+  "governance": {"auth_config": {"admin_username": %q, "admin_password": %q, "is_enabled": true}}
+}`, bifrostUsername, bifrostPassword)
 
 // Shared state across all tests in the package: the Bifrost container's
 // exposed URL and the path to a tofurc that routes our provider via
@@ -112,12 +118,17 @@ func startBifrost(ctx context.Context) (testcontainers.Container, error) {
 		Image:        bifrostImage,
 		ExposedPorts: []string{bifrostPort},
 		Env: map[string]string{
-			"APP_PORT":               "8080",
-			"APP_HOST":               "0.0.0.0",
-			"LOG_LEVEL":              "info",
-			"BIFROST_ADMIN_USERNAME": bifrostUsername,
-			"BIFROST_ADMIN_PASSWORD": bifrostPassword,
+			"APP_PORT":  "8080",
+			"APP_HOST":  "0.0.0.0",
+			"LOG_LEVEL": "info",
 		},
+		// Bifrost v2.x locks the management API until an admin account exists;
+		// seed it from config.json instead of going through the setup-token flow.
+		Files: []testcontainers.ContainerFile{{
+			Reader:            strings.NewReader(bifrostConfig),
+			ContainerFilePath: "/app/data/config.json",
+			FileMode:          0o644,
+		}},
 		WaitingFor: wait.ForHTTP("/health").
 			WithPort(bifrostPort).
 			WithStartupTimeout(90 * time.Second),

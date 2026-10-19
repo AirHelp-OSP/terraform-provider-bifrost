@@ -10,5 +10,5 @@ terraform {
 provider "bifrost" {
   endpoint = "http://localhost:8080"
   username = "admin"
-  password = "testpassword123"
+  password = "TestPassword123!"
 }

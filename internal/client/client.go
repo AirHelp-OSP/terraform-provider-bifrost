@@ -153,16 +153,19 @@ type CreateProviderRequest struct {
 
 // UpdateProviderRequest is the payload for PUT /api/providers/{name}.
 //
-// Bifrost leaves omitted fields unchanged; the resource sends only the
-// blocks the user has configured. Keys are not part of this payload in
-// v1.5.0+ — manage them via bifrost_provider_key.
+// Keys are not part of this payload in v1.5.0+ — manage them via
+// bifrost_provider_key.
+//
+// proxy_config and custom_provider_config intentionally lack omitempty: since
+// v2.x Bifrost keeps an omitted block as stored and only clears it on an
+// explicit null, so a removed block must be sent as null to be cleared.
 type UpdateProviderRequest struct {
 	NetworkConfig            *schemas.NetworkConfig            `json:"network_config,omitempty"`
 	ConcurrencyAndBufferSize *schemas.ConcurrencyAndBufferSize `json:"concurrency_and_buffer_size,omitempty"`
-	ProxyConfig              *schemas.ProxyConfig              `json:"proxy_config,omitempty"`
+	ProxyConfig              *schemas.ProxyConfig              `json:"proxy_config"`
 	SendBackRawRequest       *bool                             `json:"send_back_raw_request,omitempty"`
 	SendBackRawResponse      *bool                             `json:"send_back_raw_response,omitempty"`
-	CustomProviderConfig     *schemas.CustomProviderConfig     `json:"custom_provider_config,omitempty"`
+	CustomProviderConfig     *schemas.CustomProviderConfig     `json:"custom_provider_config"`
 }
 
 // ProviderResponse mirrors handlers.ProviderResponse.
@@ -258,11 +261,28 @@ func (c *BifrostClient) ListProviderKeys(ctx context.Context, providerName strin
 	return resp.Keys, nil
 }
 
+// updateProviderKeyRequest shadows the omitempty fields of schemas.Key that the
+// provider manages. Since v2.x Bifrost applies key updates as a patch — an
+// omitted field keeps its stored value — so a removed block must be sent as an
+// explicit null to be cleared.
+type updateProviderKeyRequest struct {
+	schemas.Key
+	Aliases             schemas.KeyAliases           `json:"aliases"`
+	BedrockKeyConfig    *schemas.BedrockKeyConfig    `json:"bedrock_key_config"`
+	CloudflareKeyConfig *schemas.CloudflareKeyConfig `json:"cloudflare_key_config"`
+}
+
 // UpdateProviderKey calls PUT /api/providers/{provider}/keys/{key_id}.
 func (c *BifrostClient) UpdateProviderKey(ctx context.Context, providerName, keyID string, key schemas.Key) (*schemas.Key, error) {
 	var resp schemas.Key
 	path := "/api/providers/" + url.PathEscape(providerName) + "/keys/" + url.PathEscape(keyID)
-	if err := c.doRequest(ctx, http.MethodPut, path, key, &resp); err != nil {
+	body := updateProviderKeyRequest{
+		Key:                 key,
+		Aliases:             key.Aliases,
+		BedrockKeyConfig:    key.BedrockKeyConfig,
+		CloudflareKeyConfig: key.CloudflareKeyConfig,
+	}
+	if err := c.doRequest(ctx, http.MethodPut, path, body, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

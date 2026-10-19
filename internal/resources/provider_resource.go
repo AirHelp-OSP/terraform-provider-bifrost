@@ -18,6 +18,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"github.com/maximhq/bifrost/core/schemas"
 
@@ -42,6 +43,14 @@ func NewProviderResource() resource.Resource {
 type ProviderResource struct {
 	client *bifrostclient.BifrostClient
 }
+
+const (
+	defaultRequestTimeoutSeconds = 30
+	defaultRetryBackoffInitialMs = 500
+	defaultRetryBackoffMaxMs     = 5000
+	defaultConcurrency           = 1000
+	defaultBufferSize            = 5000
+)
 
 // ── Model types ───────────────────────────────────────────────────────────────
 
@@ -159,7 +168,7 @@ func (r *ProviderResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 						Description:         "Request timeout in seconds.",
 						Optional:            true,
 						Computed:            true,
-						Default:             int64default.StaticInt64(30),
+						Default:             int64default.StaticInt64(defaultRequestTimeoutSeconds),
 					},
 					"max_retries": schema.Int64Attribute{
 						MarkdownDescription: "Maximum retry attempts on upstream failure. Defaults to `0`.",
@@ -173,14 +182,14 @@ func (r *ProviderResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 						Description:         "Initial retry backoff in milliseconds.",
 						Optional:            true,
 						Computed:            true,
-						Default:             int64default.StaticInt64(500),
+						Default:             int64default.StaticInt64(defaultRetryBackoffInitialMs),
 					},
 					"retry_backoff_max_ms": schema.Int64Attribute{
 						MarkdownDescription: "Maximum retry backoff in milliseconds. Defaults to `5000`.",
 						Description:         "Maximum retry backoff in milliseconds.",
 						Optional:            true,
 						Computed:            true,
-						Default:             int64default.StaticInt64(5000),
+						Default:             int64default.StaticInt64(defaultRetryBackoffMaxMs),
 					},
 					"insecure_skip_verify": schema.BoolAttribute{
 						MarkdownDescription: "Disable TLS certificate verification. Defaults to `false`. **Use with caution.**",
@@ -254,14 +263,14 @@ func (r *ProviderResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 						Description:         "Number of concurrent operations.",
 						Optional:            true,
 						Computed:            true,
-						Default:             int64default.StaticInt64(1000),
+						Default:             int64default.StaticInt64(defaultConcurrency),
 					},
 					"buffer_size": schema.Int64Attribute{
 						MarkdownDescription: "Buffer size (must be ≥ `concurrency`). Defaults to `5000`.",
 						Description:         "Buffer size (must be >= concurrency).",
 						Optional:            true,
 						Computed:            true,
-						Default:             int64default.StaticInt64(5000),
+						Default:             int64default.StaticInt64(defaultBufferSize),
 					},
 				},
 			},
@@ -302,13 +311,16 @@ func (v bufferSizeAtLeastConcurrencyValidator) MarkdownDescription(ctx context.C
 }
 
 func (bufferSizeAtLeastConcurrencyValidator) ValidateResource(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
-	var model ProviderResourceModel
-	resp.Diagnostics.Append(req.Config.Get(ctx, &model)...)
-	if resp.Diagnostics.HasError() {
+	// Read only this block: decoding the whole config into ProviderResourceModel
+	// fails when any nested block is still unknown (e.g. set from a variable).
+	var obj types.Object
+	resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("concurrency_and_buffer_size"), &obj)...)
+	if resp.Diagnostics.HasError() || obj.IsNull() || obj.IsUnknown() {
 		return
 	}
-	cb := model.ConcurrencyAndBufferSize
-	if cb == nil {
+	cb := &ConcurrencyBufferSizeModel{}
+	resp.Diagnostics.Append(obj.As(ctx, cb, basetypes.ObjectAsOptions{})...)
+	if resp.Diagnostics.HasError() {
 		return
 	}
 	if cb.Concurrency.IsNull() || cb.Concurrency.IsUnknown() {
@@ -408,15 +420,22 @@ func (r *ProviderResource) Read(ctx context.Context, req resource.ReadRequest, r
 }
 
 func (r *ProviderResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	var plan ProviderResourceModel
+	var plan, state ProviderResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
 	tflog.Debug(ctx, "updating Bifrost provider", map[string]any{"provider_name": plan.ProviderName.ValueString()})
 
-	updateReq, diags := modelToUpdateRequest(ctx, plan)
+	current, err := r.client.GetProvider(ctx, plan.ProviderName.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError("Error reading provider before update", err.Error())
+		return
+	}
+
+	updateReq, diags := modelToUpdateRequest(ctx, plan, state, current)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -495,24 +514,44 @@ func modelToCreateRequest(ctx context.Context, m ProviderResourceModel) (bifrost
 	return req, diags
 }
 
-func modelToUpdateRequest(ctx context.Context, m ProviderResourceModel) (bifrostclient.UpdateProviderRequest, diag.Diagnostics) {
+// modelToUpdateRequest builds the PUT payload on top of the provider's current
+// server-side config. Bifrost requires concurrency_and_buffer_size on every
+// update and replaces network_config wholesale, so both are always sent: an
+// unmanaged block echoes the stored values, a block removed from config resets
+// to the schema defaults, and settings this resource does not expose survive.
+func modelToUpdateRequest(ctx context.Context, m, prior ProviderResourceModel, current *bifrostclient.ProviderResponse) (bifrostclient.UpdateProviderRequest, diag.Diagnostics) {
 	var diags diag.Diagnostics
-	req := bifrostclient.UpdateProviderRequest{}
 
-	if m.NetworkConfig != nil {
-		nc, d := modelToNetworkConfig(ctx, m.NetworkConfig)
-		diags.Append(d...)
-		if !diags.HasError() {
-			req.NetworkConfig = &nc
-		}
+	// A redacted ca_cert_pem echoed back unchanged is restored from storage by Bifrost.
+	nc := current.NetworkConfig
+	ncModel := m.NetworkConfig
+	if ncModel == nil && prior.NetworkConfig != nil {
+		ncModel = defaultNetworkConfigModel()
 	}
-	if m.ConcurrencyAndBufferSize != nil {
-		cb := modelToConcurrencyAndBufferSize(m.ConcurrencyAndBufferSize)
-		req.ConcurrencyAndBufferSize = &cb
+	if ncModel != nil {
+		diags.Append(applyNetworkConfigModel(ctx, &nc, ncModel)...)
 	}
-	if m.ProxyConfig != nil {
+
+	cb := current.ConcurrencyAndBufferSize
+	switch {
+	case m.ConcurrencyAndBufferSize != nil:
+		cb = modelToConcurrencyAndBufferSize(m.ConcurrencyAndBufferSize)
+	case prior.ConcurrencyAndBufferSize != nil:
+		cb = schemas.ConcurrencyAndBufferSize{Concurrency: defaultConcurrency, BufferSize: defaultBufferSize}
+	}
+
+	req := bifrostclient.UpdateProviderRequest{
+		NetworkConfig:            &nc,
+		ConcurrencyAndBufferSize: &cb,
+	}
+	switch {
+	case m.ProxyConfig != nil:
 		pc := modelToProxyConfig(m.ProxyConfig)
 		req.ProxyConfig = &pc
+	case prior.ProxyConfig != nil:
+		// Bifrost v2.3.0 ignores a null proxy_config when persisting, so clear it
+		// with type "none", which Bifrost treats the same as no proxy.
+		req.ProxyConfig = &schemas.ProxyConfig{Type: schemas.NoProxy}
 	}
 	if !m.SendBackRawRequest.IsNull() && !m.SendBackRawRequest.IsUnknown() {
 		v := m.SendBackRawRequest.ValueBool()
@@ -564,8 +603,13 @@ func responseToModel(apiResp *bifrostclient.ProviderResponse, prior *ProviderRes
 		m.NetworkConfig = ncRes.model
 	}
 
-	// proxy_config: API returns nil if unconfigured.
-	if apiResp.ProxyConfig != nil {
+	// proxy_config: API returns nil if unconfigured, or type "none" after the
+	// block was removed; keep "none" only when the user declared the block.
+	var priorHasProxy bool
+	if prior != nil {
+		priorHasProxy = prior.ProxyConfig != nil
+	}
+	if apiResp.ProxyConfig != nil && (apiResp.ProxyConfig.Type != schemas.NoProxy || priorHasProxy) {
 		pc := apiResp.ProxyConfig
 		pcModel := &ProxyConfigModel{
 			Type: types.StringValue(string(pc.Type)),
@@ -651,27 +695,46 @@ func networkConfigToModel(nc schemas.NetworkConfig, prior *ProviderResourceModel
 }
 
 func modelToNetworkConfig(ctx context.Context, m *NetworkConfigModel) (schemas.NetworkConfig, diag.Diagnostics) {
+	var nc schemas.NetworkConfig
+	diags := applyNetworkConfigModel(ctx, &nc, m)
+	return nc, diags
+}
+
+// applyNetworkConfigModel overwrites the fields this resource manages, leaving
+// the rest of nc as it was.
+func applyNetworkConfigModel(ctx context.Context, nc *schemas.NetworkConfig, m *NetworkConfigModel) diag.Diagnostics {
 	var diags diag.Diagnostics
-	nc := schemas.NetworkConfig{
-		BaseURL:                        m.BaseURL.ValueString(),
-		DefaultRequestTimeoutInSeconds: int(m.DefaultRequestTimeoutInSeconds.ValueInt64()),
-		MaxRetries:                     int(m.MaxRetries.ValueInt64()),
-		InsecureSkipVerify:             m.InsecureSkipVerify.ValueBool(),
-		CACertPEM:                      stringToEnvVar(m.CACertPEM),
-	}
+	nc.BaseURL = m.BaseURL.ValueString()
+	nc.DefaultRequestTimeoutInSeconds = int(m.DefaultRequestTimeoutInSeconds.ValueInt64())
+	nc.MaxRetries = int(m.MaxRetries.ValueInt64())
+	nc.InsecureSkipVerify = m.InsecureSkipVerify.ValueBool()
+	nc.CACertPEM = stringToEnvVar(m.CACertPEM)
 	if !m.RetryBackoffInitialMs.IsNull() && !m.RetryBackoffInitialMs.IsUnknown() {
 		nc.RetryBackoffInitial = time.Duration(m.RetryBackoffInitialMs.ValueInt64()) * time.Millisecond
 	}
 	if !m.RetryBackoffMaxMs.IsNull() && !m.RetryBackoffMaxMs.IsUnknown() {
 		nc.RetryBackoffMax = time.Duration(m.RetryBackoffMaxMs.ValueInt64()) * time.Millisecond
 	}
+	nc.ExtraHeaders = nil
 	if !m.ExtraHeaders.IsNull() && !m.ExtraHeaders.IsUnknown() {
 		hdrs := make(map[string]string)
-		d := m.ExtraHeaders.ElementsAs(ctx, &hdrs, false)
-		diags.Append(d...)
+		diags.Append(m.ExtraHeaders.ElementsAs(ctx, &hdrs, false)...)
 		nc.ExtraHeaders = hdrs
 	}
-	return nc, diags
+	return diags
+}
+
+func defaultNetworkConfigModel() *NetworkConfigModel {
+	return &NetworkConfigModel{
+		BaseURL:                        types.StringNull(),
+		ExtraHeaders:                   types.MapNull(types.StringType),
+		DefaultRequestTimeoutInSeconds: types.Int64Value(defaultRequestTimeoutSeconds),
+		MaxRetries:                     types.Int64Value(0),
+		RetryBackoffInitialMs:          types.Int64Value(defaultRetryBackoffInitialMs),
+		RetryBackoffMaxMs:              types.Int64Value(defaultRetryBackoffMaxMs),
+		InsecureSkipVerify:             types.BoolValue(false),
+		CACertPEM:                      types.StringNull(),
+	}
 }
 
 func modelToProxyConfig(m *ProxyConfigModel) schemas.ProxyConfig {
