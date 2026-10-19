@@ -1,0 +1,25 @@
+---
+page_title: "{{.ProviderShortName}} Provider"
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.ProviderShortName}} Provider
+
+{{ .Description | trimspace }}
+
+## Example Usage
+
+### Basic auth
+
+Admin username and password.
+
+{{ tffile "examples/provider/provider.tf" }}
+
+### API key (Bearer token)
+
+Bifrost Enterprise admin API key (`bfak_...`), sent as `Authorization: Bearer <token>`. Takes precedence over `username`/`password`.
+
+{{ tffile "examples/provider/provider_token.tf" }}
+
+{{ .SchemaMarkdown | trimspace }}

@@ -31,6 +31,7 @@ type BifrostProviderModel struct {
 	Endpoint types.String `tfsdk:"endpoint"`
 	Username types.String `tfsdk:"username"`
 	Password types.String `tfsdk:"password"`
+	Token    types.String `tfsdk:"token"`
 }
 
 // New returns a provider factory function.
@@ -71,6 +72,14 @@ func (p *BifrostProvider) Schema(_ context.Context, _ provider.SchemaRequest, re
 				Optional:    true,
 				Sensitive:   true,
 			},
+			"token": schema.StringAttribute{
+				MarkdownDescription: "Bifrost admin API key (`bfak_...`) sent as a Bearer token. " +
+					"Takes precedence over `username`/`password`. " +
+					"May also be set via the `BIFROST_TOKEN` environment variable.",
+				Description: "Bifrost admin API key sent as a Bearer token. May also be set via BIFROST_TOKEN environment variable.",
+				Optional:    true,
+				Sensitive:   true,
+			},
 		},
 	}
 }
@@ -105,6 +114,13 @@ func (p *BifrostProvider) Configure(ctx context.Context, req provider.ConfigureR
 			"The provider cannot be configured with an unknown password. Set a static value or use BIFROST_PASSWORD.",
 		)
 	}
+	if config.Token.IsUnknown() {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("token"),
+			"Unknown Bifrost token",
+			"The provider cannot be configured with an unknown token. Set a static value or use BIFROST_TOKEN.",
+		)
+	}
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -132,7 +148,13 @@ func (p *BifrostProvider) Configure(ctx context.Context, req provider.ConfigureR
 		password = os.Getenv("BIFROST_PASSWORD")
 	}
 
+	token := config.Token.ValueString()
+	if token == "" {
+		token = os.Getenv("BIFROST_TOKEN")
+	}
+
 	client := bifrostclient.New(endpoint, username, password)
+	client.Token = token
 	resp.DataSourceData = client
 	resp.ResourceData = client
 }

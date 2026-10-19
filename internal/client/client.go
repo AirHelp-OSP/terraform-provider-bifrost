@@ -26,9 +26,12 @@ const defaultHTTPTimeout = 30 * time.Second
 
 // BifrostClient is an authenticated HTTP client for the Bifrost API.
 type BifrostClient struct {
-	BaseURL    string
-	Username   string
-	Password   string
+	BaseURL  string
+	Username string
+	Password string
+	// Token is a Bifrost admin API key (bfak_...). When set it is sent as a
+	// Bearer token and takes precedence over Username/Password.
+	Token      string
 	HTTPClient *http.Client
 }
 
@@ -74,7 +77,9 @@ func (c *BifrostClient) doRequest(ctx context.Context, method, path string, body
 	}
 	req.Header.Set("Accept", "application/json")
 
-	if c.Username != "" || c.Password != "" {
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	} else if c.Username != "" || c.Password != "" {
 		creds := base64.StdEncoding.EncodeToString([]byte(c.Username + ":" + c.Password))
 		req.Header.Set("Authorization", "Basic "+creds)
 	}
