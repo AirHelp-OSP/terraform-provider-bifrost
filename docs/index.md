@@ -58,5 +58,5 @@ provider "bifrost" {
 
 - `endpoint` (String) Bifrost API base URL (e.g. `http://bifrost.internal:8080`). May also be set via the `BIFROST_ENDPOINT` environment variable.
 - `password` (String, Sensitive) Basic-auth password for the Bifrost admin API. May also be set via the `BIFROST_PASSWORD` environment variable.
-- `token` (String, Sensitive) Bifrost admin API key (`bfak_...`) sent as a Bearer token. Takes precedence over `username`/`password`. May also be set via the `BIFROST_TOKEN` environment variable.
+- `token` (String, Sensitive) Bifrost admin API key (`bfak_...`) sent as a Bearer token. Takes precedence over `username`/`password`. May also be set via the `BIFROST_TOKEN` environment variable, which is ignored when `username` or `password` is set in the configuration.
 - `username` (String, Sensitive) Basic-auth username for the Bifrost admin API. May also be set via the `BIFROST_USERNAME` environment variable.

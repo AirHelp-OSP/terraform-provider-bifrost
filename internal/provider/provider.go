@@ -2,6 +2,7 @@
 package provider
 
 import (
+	"cmp"
 	"context"
 	"os"
 
@@ -75,7 +76,8 @@ func (p *BifrostProvider) Schema(_ context.Context, _ provider.SchemaRequest, re
 			"token": schema.StringAttribute{
 				MarkdownDescription: "Bifrost admin API key (`bfak_...`) sent as a Bearer token. " +
 					"Takes precedence over `username`/`password`. " +
-					"May also be set via the `BIFROST_TOKEN` environment variable.",
+					"May also be set via the `BIFROST_TOKEN` environment variable, which is ignored when " +
+					"`username` or `password` is set in the configuration.",
 				Description: "Bifrost admin API key sent as a Bearer token. May also be set via BIFROST_TOKEN environment variable.",
 				Optional:    true,
 				Sensitive:   true,
@@ -138,25 +140,29 @@ func (p *BifrostProvider) Configure(ctx context.Context, req provider.ConfigureR
 		return
 	}
 
-	username := config.Username.ValueString()
-	if username == "" {
-		username = os.Getenv("BIFROST_USERNAME")
-	}
-
-	password := config.Password.ValueString()
-	if password == "" {
-		password = os.Getenv("BIFROST_PASSWORD")
-	}
-
-	token := config.Token.ValueString()
-	if token == "" {
-		token = os.Getenv("BIFROST_TOKEN")
-	}
+	username, password, token := resolveAuth(config)
 
 	client := bifrostclient.New(endpoint, username, password)
 	client.Token = token
 	resp.DataSourceData = client
 	resp.ResourceData = client
+}
+
+// resolveAuth prefers credentials set in configuration over environment
+// variables, so a stale BIFROST_TOKEN can't override username/password set in HCL.
+func resolveAuth(config BifrostProviderModel) (username, password, token string) {
+	username = config.Username.ValueString()
+	password = config.Password.ValueString()
+	token = config.Token.ValueString()
+
+	switch {
+	case token != "":
+		return "", "", token
+	case username != "" || password != "":
+		return cmp.Or(username, os.Getenv("BIFROST_USERNAME")), cmp.Or(password, os.Getenv("BIFROST_PASSWORD")), ""
+	default:
+		return os.Getenv("BIFROST_USERNAME"), os.Getenv("BIFROST_PASSWORD"), os.Getenv("BIFROST_TOKEN")
+	}
 }
 
 func (p *BifrostProvider) Resources(_ context.Context) []func() resource.Resource {
