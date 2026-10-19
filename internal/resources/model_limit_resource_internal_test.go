@@ -46,39 +46,15 @@ func TestModelLimitResponseToModel_NullOptionals(t *testing.T) {
 	}
 }
 
-// TestApiRespToBudgets_EmptyServerListIsDrift guards against budgets removed
-// outside Terraform being masked by prior state.
-func TestApiRespToBudgets_EmptyServerListIsDrift(t *testing.T) {
-	prior := []VKBudgetModel{{MaxLimit: types.Float64Value(100), ResetDuration: types.StringValue("1M")}}
-
-	got := apiRespToBudgets(nil, prior)
-	if got == nil || len(got) != 0 {
-		t.Errorf("empty server list with configured budgets must yield an empty list, got %#v", got)
-	}
-	if got := apiRespToBudgets(nil, nil); got != nil {
-		t.Errorf("empty server list with no configured budgets must stay null, got %#v", got)
-	}
-}
-
-// TestModelLimitResponseToModel_PreservesCalendarAligned covers Bifrost not
-// echoing calendar_aligned on budgets, which would otherwise produce a
-// perpetual diff for calendar-aligned budgets.
-func TestModelLimitResponseToModel_PreservesCalendarAligned(t *testing.T) {
+// TestModelLimitResponseToModel_EmptyServerBudgetsIsDrift guards against
+// budgets removed outside Terraform being masked by prior state.
+func TestModelLimitResponseToModel_EmptyServerBudgetsIsDrift(t *testing.T) {
 	prior := &ModelLimitResourceModel{
-		Budgets: []VKBudgetModel{{
-			MaxLimit:        types.Float64Value(100),
-			ResetDuration:   types.StringValue("1M"),
-			CalendarAligned: types.BoolValue(true),
-		}},
+		Budgets: []ModelLimitBudgetModel{{MaxLimit: types.Float64Value(100), ResetDuration: types.StringValue("1M")}},
 	}
-	m := modelLimitResponseToModel(&bifrostclient.ModelConfigResponse{
-		ID:        "mc-1",
-		ModelName: "gpt-4o",
-		Scope:     "global",
-		Budgets:   []bifrostclient.VKBudget{{MaxLimit: 100, ResetDuration: "1M"}},
-	}, prior)
+	m := modelLimitResponseToModel(&bifrostclient.ModelConfigResponse{ID: "mc-1", ModelName: "gpt-4o", Scope: "global"}, prior)
 
-	if len(m.Budgets) != 1 || !m.Budgets[0].CalendarAligned.ValueBool() {
-		t.Errorf("calendar_aligned must be preserved from prior state, got %+v", m.Budgets)
+	if m.Budgets == nil || len(m.Budgets) != 0 {
+		t.Errorf("empty server list with configured budgets must yield an empty list, got %#v", m.Budgets)
 	}
 }

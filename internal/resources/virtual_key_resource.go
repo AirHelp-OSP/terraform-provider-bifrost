@@ -46,6 +46,7 @@ type VirtualKeyResourceModel struct {
 	ProviderConfigs []VKProviderConfigModel `tfsdk:"provider_configs"`
 	Budgets         []VKBudgetModel         `tfsdk:"budgets"`
 	RateLimit       *VKRateLimitModel       `tfsdk:"rate_limit"`
+	CalendarAligned types.Bool              `tfsdk:"calendar_aligned"`
 }
 
 type VKProviderConfigModel struct {
@@ -95,11 +96,13 @@ var budgetsSchema = schema.ListNestedAttribute{
 				Required:            true,
 			},
 			"calendar_aligned": schema.BoolAttribute{
-				MarkdownDescription: "Snap resets to calendar boundaries (start of day/week/month) instead of rolling. Defaults to `false`.",
-				Description:         "Snap resets to calendar boundaries.",
-				Optional:            true,
-				Computed:            true,
-				Default:             booldefault.StaticBool(false),
+				MarkdownDescription: "**Deprecated**: Bifrost ignores calendar alignment on individual budgets. " +
+					"Use the virtual key's top-level `calendar_aligned` instead.",
+				Description:        "Deprecated: ignored by Bifrost; use the virtual key's top-level calendar_aligned.",
+				DeprecationMessage: "Bifrost ignores calendar alignment on individual budgets. Set calendar_aligned on the bifrost_virtual_key itself instead.",
+				Optional:           true,
+				Computed:           true,
+				Default:            booldefault.StaticBool(false),
 			},
 		},
 	},
@@ -237,6 +240,15 @@ func (r *VirtualKeyResource) Schema(_ context.Context, _ resource.SchemaRequest,
 			},
 			"budgets":    budgetsSchema,
 			"rate_limit": rateLimitSchema,
+			"calendar_aligned": schema.BoolAttribute{
+				MarkdownDescription: "Reset all of this key's budgets (including per-provider-config ones) at calendar " +
+					"boundaries in UTC (start of day/week/month/quarter/year) instead of on a rolling window. " +
+					"Only applies to `d`, `w`, `M`, `Q` and `Y` durations. Defaults to `false`.",
+				Description: "Reset all budgets at calendar boundaries instead of on a rolling window.",
+				Optional:    true,
+				Computed:    true,
+				Default:     booldefault.StaticBool(false),
+			},
 		},
 	}
 }
@@ -371,8 +383,9 @@ func (r *VirtualKeyResource) ImportState(ctx context.Context, req resource.Impor
 
 func vkModelToCreateRequest(m VirtualKeyResourceModel) bifrostclient.CreateVirtualKeyRequest {
 	req := bifrostclient.CreateVirtualKeyRequest{
-		Name:        m.Name.ValueString(),
-		Description: m.Description.ValueString(),
+		Name:            m.Name.ValueString(),
+		Description:     m.Description.ValueString(),
+		CalendarAligned: m.CalendarAligned.ValueBool(),
 	}
 
 	if !m.IsActive.IsNull() && !m.IsActive.IsUnknown() {
@@ -403,8 +416,9 @@ func vkModelToUpdateRequest(m VirtualKeyResourceModel) bifrostclient.UpdateVirtu
 	name := m.Name.ValueString()
 	desc := m.Description.ValueString()
 	req := bifrostclient.UpdateVirtualKeyRequest{
-		Name:        &name,
-		Description: &desc,
+		Name:            &name,
+		Description:     &desc,
+		CalendarAligned: m.CalendarAligned.ValueBoolPointer(),
 	}
 
 	if !m.IsActive.IsNull() && !m.IsActive.IsUnknown() {
@@ -456,9 +470,8 @@ func modelToBudgets(ms []VKBudgetModel) []bifrostclient.VKBudget {
 	out := make([]bifrostclient.VKBudget, 0, len(ms))
 	for _, m := range ms {
 		out = append(out, bifrostclient.VKBudget{
-			MaxLimit:        m.MaxLimit.ValueFloat64(),
-			ResetDuration:   m.ResetDuration.ValueString(),
-			CalendarAligned: m.CalendarAligned.ValueBool(),
+			MaxLimit:      m.MaxLimit.ValueFloat64(),
+			ResetDuration: m.ResetDuration.ValueString(),
 		})
 	}
 	return out
@@ -512,10 +525,11 @@ func modelToVKProviderConfigCreate(pc VKProviderConfigModel) bifrostclient.VKPro
 // from prior state (the API does not return it after create).
 func vkResponseToModel(apiResp *bifrostclient.VirtualKeyResponse, prior *VirtualKeyResourceModel) *VirtualKeyResourceModel {
 	m := &VirtualKeyResourceModel{
-		ID:          types.StringValue(apiResp.ID),
-		Name:        types.StringValue(apiResp.Name),
-		Description: types.StringValue(apiResp.Description),
-		IsActive:    types.BoolValue(apiResp.IsActive),
+		ID:              types.StringValue(apiResp.ID),
+		Name:            types.StringValue(apiResp.Name),
+		Description:     types.StringValue(apiResp.Description),
+		IsActive:        types.BoolValue(apiResp.IsActive),
+		CalendarAligned: types.BoolValue(apiResp.CalendarAligned),
 	}
 
 	if apiResp.Value != "" {
@@ -560,9 +574,9 @@ func vkResponseToModel(apiResp *bifrostclient.VirtualKeyResponse, prior *Virtual
 
 // apiRespToBudgets converts the budgets list from an API response into TF state.
 //
-// Matching is keyed by reset_duration (the same key the server uses to reconcile
-// multi-budget updates), letting us preserve prior `calendar_aligned` when the
-// server silently downgrades it to false.
+// The deprecated per-budget `calendar_aligned` is never stored by Bifrost, so it
+// is carried over from prior state, matched by reset_duration (the key the
+// server reconciles budgets on), and defaults to false.
 //
 // An empty server list is reported as-is so budgets removed outside Terraform
 // show up as drift. It stays an empty (non-nil) list when prior had one, so a
@@ -580,8 +594,8 @@ func apiRespToBudgets(bs []bifrostclient.VKBudget, prior []VKBudgetModel) []VKBu
 	}
 	out := make([]VKBudgetModel, 0, len(bs))
 	for _, b := range bs {
-		calAligned := types.BoolValue(b.CalendarAligned)
-		if pb, ok := priorByDuration[b.ResetDuration]; ok && !b.CalendarAligned && pb.CalendarAligned.ValueBool() {
+		calAligned := types.BoolValue(false)
+		if pb, ok := priorByDuration[b.ResetDuration]; ok {
 			calAligned = pb.CalendarAligned
 		}
 		out = append(out, VKBudgetModel{

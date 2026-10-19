@@ -133,3 +133,51 @@ func assertVKBudget(t *testing.T, vkID string, wantMax float64, wantReset string
 		t.Errorf("budget.reset_duration for vk %s: got %q, want %q", vkID, got.ResetDuration, wantReset)
 	}
 }
+
+// TestBifrostVirtualKeyCalendarAligned guards that calendar alignment reaches
+// Bifrost. It used to be set per budget, which Bifrost's HTTP API ignores, while
+// the provider kept the configured value in state so the plan stayed clean.
+func TestBifrostVirtualKeyCalendarAligned(t *testing.T) {
+	tfDir := test_structure.CopyTerraformFolderToTemp(t, ".", "testdata/virtual_key")
+
+	opts := modelLimitOptions(tfDir, map[string]interface{}{
+		"vk_name":          "e2e-vk-calendar",
+		"calendar_aligned": true,
+	})
+	defer terraform.Destroy(t, opts)
+
+	terraform.Apply(t, opts)
+	vkID := terraform.Output(t, opts, "vk_id")
+	if !getVKCalendarAligned(t, vkID) {
+		t.Error("after create: calendar_aligned not set on the server")
+	}
+	assertCleanPlan(t, opts, "create")
+
+	bifrostPut(t, "/api/governance/virtual-keys/"+vkID, `{"calendar_aligned":false}`)
+	assertDriftDetected(t, opts, "calendar_aligned")
+	terraform.Apply(t, opts)
+	if !getVKCalendarAligned(t, vkID) {
+		t.Error("drift repair did not restore calendar_aligned")
+	}
+
+	opts.Vars["calendar_aligned"] = false
+	terraform.Apply(t, opts)
+	if getVKCalendarAligned(t, vkID) {
+		t.Error("after disabling: calendar_aligned still set on the server")
+	}
+	assertCleanPlan(t, opts, "disable")
+}
+
+func getVKCalendarAligned(t *testing.T, vkID string) bool {
+	t.Helper()
+	var envelope struct {
+		VirtualKey struct {
+			CalendarAligned bool `json:"calendar_aligned"`
+		} `json:"virtual_key"`
+	}
+	body := bifrostGet(t, "/api/governance/virtual-keys/"+vkID)
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		t.Fatalf("decode virtual key: %v (body=%s)", err, string(body))
+	}
+	return envelope.VirtualKey.CalendarAligned
+}

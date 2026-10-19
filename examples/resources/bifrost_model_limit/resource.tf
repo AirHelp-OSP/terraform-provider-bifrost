@@ -5,9 +5,8 @@ resource "bifrost_model_limit" "gpt4o" {
 
   budgets = [
     {
-      max_limit        = 500
-      reset_duration   = "1M"
-      calendar_aligned = true
+      max_limit      = 500
+      reset_duration = "1M"
     },
     {
       max_limit      = 50

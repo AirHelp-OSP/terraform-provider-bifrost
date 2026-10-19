@@ -88,7 +88,7 @@ func TestBifrostModelLimitLimitDrift(t *testing.T) {
 func assertDriftDetected(t *testing.T, opts *terraform.Options, what string) {
 	t.Helper()
 	if exitCode := terraform.PlanExitCode(t, opts); exitCode != 2 {
-		t.Errorf("plan after out-of-band %s removal: expected changes (exit 2), got exit %d", what, exitCode)
+		t.Errorf("plan after out-of-band %s change: expected changes (exit 2), got exit %d", what, exitCode)
 	}
 }
 

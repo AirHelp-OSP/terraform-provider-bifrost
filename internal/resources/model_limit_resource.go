@@ -32,13 +32,42 @@ type ModelLimitResource struct {
 }
 
 type ModelLimitResourceModel struct {
-	ID        types.String      `tfsdk:"id"`
-	ModelName types.String      `tfsdk:"model_name"`
-	Provider  types.String      `tfsdk:"provider_name"`
-	Scope     types.String      `tfsdk:"scope"`
-	ScopeID   types.String      `tfsdk:"scope_id"`
-	Budgets   []VKBudgetModel   `tfsdk:"budgets"`
-	RateLimit *VKRateLimitModel `tfsdk:"rate_limit"`
+	ID        types.String            `tfsdk:"id"`
+	ModelName types.String            `tfsdk:"model_name"`
+	Provider  types.String            `tfsdk:"provider_name"`
+	Scope     types.String            `tfsdk:"scope"`
+	ScopeID   types.String            `tfsdk:"scope_id"`
+	Budgets   []ModelLimitBudgetModel `tfsdk:"budgets"`
+	RateLimit *VKRateLimitModel       `tfsdk:"rate_limit"`
+}
+
+type ModelLimitBudgetModel struct {
+	MaxLimit      types.Float64 `tfsdk:"max_limit"`
+	ResetDuration types.String  `tfsdk:"reset_duration"`
+}
+
+// modelLimitBudgetsSchema omits calendar_aligned: a model limit inherits
+// alignment from its owning virtual key (false for global scope).
+var modelLimitBudgetsSchema = schema.ListNestedAttribute{
+	MarkdownDescription: "Budget configurations. Each entry must have a unique `reset_duration` (e.g. `1d`, `1w`, `1M`). " +
+		"Resets are calendar-aligned only for `virtual_key` scope when the owning key sets `calendar_aligned`. " +
+		"Sending an empty list clears all existing budgets on update.",
+	Description: "Budget configurations (each must have a unique reset_duration).",
+	Optional:    true,
+	NestedObject: schema.NestedAttributeObject{
+		Attributes: map[string]schema.Attribute{
+			"max_limit": schema.Float64Attribute{
+				MarkdownDescription: "Maximum budget in dollars.",
+				Description:         "Maximum budget in dollars.",
+				Required:            true,
+			},
+			"reset_duration": schema.StringAttribute{
+				MarkdownDescription: "Budget reset period (e.g. `1d`, `1w`, `1M`). Must be unique within the list.",
+				Description:         "Budget reset period (e.g. '1d', '1w', '1M').",
+				Required:            true,
+			},
+		},
+	},
 }
 
 func (r *ModelLimitResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -100,7 +129,7 @@ func (r *ModelLimitResource) Schema(_ context.Context, _ resource.SchemaRequest,
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
-			"budgets":    budgetsSchema,
+			"budgets":    modelLimitBudgetsSchema,
 			"rate_limit": rateLimitSchema,
 		},
 	}
@@ -221,7 +250,7 @@ func modelLimitToCreateRequest(m ModelLimitResourceModel) bifrostclient.CreateMo
 		Provider:  m.Provider.ValueStringPointer(),
 		Scope:     m.Scope.ValueString(),
 		ScopeID:   m.ScopeID.ValueStringPointer(),
-		Budgets:   modelToBudgets(m.Budgets),
+		Budgets:   modelLimitBudgetsToAPI(m.Budgets),
 		RateLimit: modelToRateLimit(m.RateLimit),
 	}
 }
@@ -232,7 +261,7 @@ func modelLimitToUpdateRequest(m ModelLimitResourceModel) bifrostclient.UpdateMo
 	req := bifrostclient.UpdateModelConfigRequest{
 		ModelName: m.ModelName.ValueStringPointer(),
 		Provider:  m.Provider.ValueStringPointer(),
-		Budgets:   modelToBudgets(m.Budgets),
+		Budgets:   modelLimitBudgetsToAPI(m.Budgets),
 		RateLimit: modelToRateLimit(m.RateLimit),
 	}
 	if req.Budgets == nil {
@@ -252,11 +281,32 @@ func modelLimitResponseToModel(apiResp *bifrostclient.ModelConfigResponse, prior
 		Scope:     types.StringValue(apiResp.Scope),
 		ScopeID:   types.StringPointerValue(apiResp.ScopeID),
 	}
-	var priorBudgets []VKBudgetModel
-	if prior != nil {
-		priorBudgets = prior.Budgets
+	if len(apiResp.Budgets) > 0 {
+		m.Budgets = make([]ModelLimitBudgetModel, 0, len(apiResp.Budgets))
+		for _, b := range apiResp.Budgets {
+			m.Budgets = append(m.Budgets, ModelLimitBudgetModel{
+				MaxLimit:      types.Float64Value(b.MaxLimit),
+				ResetDuration: types.StringValue(b.ResetDuration),
+			})
+		}
+	} else if prior != nil && prior.Budgets != nil {
+		// Keep a configured `budgets = []` as an empty list rather than null.
+		m.Budgets = []ModelLimitBudgetModel{}
 	}
-	m.Budgets = apiRespToBudgets(apiResp.Budgets, priorBudgets)
 	m.RateLimit = apiRespToRateLimitModel(apiResp.RateLimit)
 	return m
+}
+
+func modelLimitBudgetsToAPI(ms []ModelLimitBudgetModel) []bifrostclient.VKBudget {
+	if ms == nil {
+		return nil
+	}
+	out := make([]bifrostclient.VKBudget, 0, len(ms))
+	for _, m := range ms {
+		out = append(out, bifrostclient.VKBudget{
+			MaxLimit:      m.MaxLimit.ValueFloat64(),
+			ResetDuration: m.ResetDuration.ValueString(),
+		})
+	}
+	return out
 }

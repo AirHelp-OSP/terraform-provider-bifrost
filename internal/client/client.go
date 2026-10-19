@@ -308,10 +308,12 @@ func (c *BifrostClient) DeleteProviderKey(ctx context.Context, providerName, key
 // reset_duration. The same shape works for both create and update; updates are a full
 // replacement that the server reconciles by reset_duration (preserving current_usage
 // for matched entries).
+//
+// Calendar alignment is not a budget property: Bifrost's HTTP API ignores a
+// per-budget calendar_aligned and applies the owning virtual key's setting.
 type VKBudget struct {
-	MaxLimit        float64 `json:"max_limit"`
-	ResetDuration   string  `json:"reset_duration"`
-	CalendarAligned bool    `json:"calendar_aligned,omitempty"`
+	MaxLimit      float64 `json:"max_limit"`
+	ResetDuration string  `json:"reset_duration"`
 }
 
 // VKRateLimit is the rate limit shape used in create requests and API responses.
@@ -354,6 +356,7 @@ type VirtualKeyResponse struct {
 	CustomerID      *string                    `json:"customer_id,omitempty"`
 	Budgets         []VKBudget                 `json:"budgets,omitempty"`
 	RateLimit       *VKRateLimit               `json:"rate_limit,omitempty"`
+	CalendarAligned bool                       `json:"calendar_aligned"`
 }
 
 // createVKResponse wraps the create VK API response envelope.
@@ -376,6 +379,7 @@ type CreateVirtualKeyRequest struct {
 	Budgets         []VKBudget               `json:"budgets,omitempty"`
 	RateLimit       *VKRateLimit             `json:"rate_limit,omitempty"`
 	IsActive        *bool                    `json:"is_active,omitempty"`
+	CalendarAligned bool                     `json:"calendar_aligned,omitempty"`
 }
 
 // UpdateVirtualKeyRequest is the payload for PUT /api/governance/virtual-keys/{id}.
@@ -406,6 +410,7 @@ type UpdateVirtualKeyRequest struct {
 	Budgets         []VKBudget               `json:"budgets"`
 	RateLimit       *VKRateLimit             `json:"rate_limit,omitempty"`
 	IsActive        *bool                    `json:"is_active,omitempty"`
+	CalendarAligned *bool                    `json:"calendar_aligned,omitempty"`
 }
 
 // CreateVirtualKey calls POST /api/governance/virtual-keys.

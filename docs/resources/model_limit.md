@@ -23,9 +23,8 @@ resource "bifrost_model_limit" "gpt4o" {
 
   budgets = [
     {
-      max_limit        = 500
-      reset_duration   = "1M"
-      calendar_aligned = true
+      max_limit      = 500
+      reset_duration = "1M"
     },
     {
       max_limit      = 50
@@ -64,7 +63,7 @@ resource "bifrost_model_limit" "team_gpt4o" {
 
 ### Optional
 
-- `budgets` (Attributes List) Budget configurations. Bifrost v1.5.0+ supports multiple budgets per virtual key (or per provider config) as long as each entry has a unique `reset_duration`. `reset_duration` accepts Bifrost duration strings such as `1d`, `1w`, or `1M`. Sending an empty list clears all existing budgets on update. (see [below for nested schema](#nestedatt--budgets))
+- `budgets` (Attributes List) Budget configurations. Each entry must have a unique `reset_duration` (e.g. `1d`, `1w`, `1M`). Resets are calendar-aligned only for `virtual_key` scope when the owning key sets `calendar_aligned`. Sending an empty list clears all existing budgets on update. (see [below for nested schema](#nestedatt--budgets))
 - `provider_name` (String) Provider name (e.g. `openai`). Omit to apply to the model on every provider. Changing it forces a new resource.
 - `rate_limit` (Attributes) Rate-limit configuration. Reset durations accept Bifrost duration strings such as `1m` or `1h`. (see [below for nested schema](#nestedatt--rate_limit))
 - `scope` (String) Where the limit applies: `global`, `virtual_key`, or `project` (_enterprise_). Defaults to `global`. Changing it forces a new resource.
@@ -81,10 +80,6 @@ Required:
 
 - `max_limit` (Number) Maximum budget in dollars.
 - `reset_duration` (String) Budget reset period (e.g. `1d`, `1w`, `1M`). Must be unique within the list.
-
-Optional:
-
-- `calendar_aligned` (Boolean) Snap resets to calendar boundaries (start of day/week/month) instead of rolling. Defaults to `false`.
 
 
 <a id="nestedatt--rate_limit"></a>
