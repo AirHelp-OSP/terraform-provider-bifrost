@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/resourcevalidator"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -114,9 +115,14 @@ var rateLimitSchema = schema.SingleNestedAttribute{
 	Optional:            true,
 	Attributes: map[string]schema.Attribute{
 		"token_max_limit": schema.Int64Attribute{
-			MarkdownDescription: "Maximum token count per window.",
+			MarkdownDescription: "Maximum token count per window. At least one of `token_max_limit` and `request_max_limit` must be set.",
 			Description:         "Maximum token count per window.",
 			Optional:            true,
+			Validators: []validator.Int64{
+				// Bifrost deletes a rate limit with neither max limit set, which
+				// would leave state without the planned rate_limit block.
+				int64validator.AtLeastOneOf(path.MatchRelative().AtParent().AtName("request_max_limit")),
+			},
 		},
 		"token_reset_duration": schema.StringAttribute{
 			MarkdownDescription: "Token-limit reset window (e.g. `1m`, `1h`).",
@@ -124,7 +130,7 @@ var rateLimitSchema = schema.SingleNestedAttribute{
 			Optional:            true,
 		},
 		"request_max_limit": schema.Int64Attribute{
-			MarkdownDescription: "Maximum request count per window.",
+			MarkdownDescription: "Maximum request count per window. At least one of `token_max_limit` and `request_max_limit` must be set.",
 			Description:         "Maximum request count per window.",
 			Optional:            true,
 		},

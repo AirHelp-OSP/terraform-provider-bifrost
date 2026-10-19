@@ -62,3 +62,42 @@ resource "bifrost_provider" "test" {
 		},
 	})
 }
+
+// TestAccVirtualKey_RateLimitNeedsAMaxLimit verifies an empty rate_limit is
+// rejected at plan time: Bifrost would delete it and the apply would fail with
+// an inconsistent result. An omitted rate_limit must still plan cleanly.
+func TestAccVirtualKey_RateLimitNeedsAMaxLimit(t *testing.T) {
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: provider.ProtoV6ProviderFactories(),
+		Steps: []resource.TestStep{
+			{
+				Config: `
+provider "bifrost" {
+  endpoint = "http://example.invalid"
+}
+
+resource "bifrost_virtual_key" "test" {
+  name = "test"
+  rate_limit = {
+    request_reset_duration = "1m"
+  }
+}
+`,
+				ExpectError: regexp.MustCompile(`(?s)At least one attribute out of.*request_max_limit`),
+			},
+			{
+				Config: `
+provider "bifrost" {
+  endpoint = "http://example.invalid"
+}
+
+resource "bifrost_virtual_key" "test" {
+  name = "test"
+}
+`,
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: true,
+			},
+		},
+	})
+}

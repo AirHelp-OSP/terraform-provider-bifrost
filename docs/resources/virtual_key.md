@@ -125,9 +125,9 @@ Optional:
 
 Optional:
 
-- `request_max_limit` (Number) Maximum request count per window.
+- `request_max_limit` (Number) Maximum request count per window. At least one of `token_max_limit` and `request_max_limit` must be set.
 - `request_reset_duration` (String) Request-limit reset window (e.g. `1m`, `1h`).
-- `token_max_limit` (Number) Maximum token count per window.
+- `token_max_limit` (Number) Maximum token count per window. At least one of `token_max_limit` and `request_max_limit` must be set.
 - `token_reset_duration` (String) Token-limit reset window (e.g. `1m`, `1h`).
 
 
@@ -137,9 +137,9 @@ Optional:
 
 Optional:
 
-- `request_max_limit` (Number) Maximum request count per window.
+- `request_max_limit` (Number) Maximum request count per window. At least one of `token_max_limit` and `request_max_limit` must be set.
 - `request_reset_duration` (String) Request-limit reset window (e.g. `1m`, `1h`).
-- `token_max_limit` (Number) Maximum token count per window.
+- `token_max_limit` (Number) Maximum token count per window. At least one of `token_max_limit` and `request_max_limit` must be set.
 - `token_reset_duration` (String) Token-limit reset window (e.g. `1m`, `1h`).
 
 ## Import
