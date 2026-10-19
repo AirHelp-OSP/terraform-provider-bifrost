@@ -538,13 +538,11 @@ func vkResponseToModel(apiResp *bifrostclient.VirtualKeyResponse, prior *Virtual
 	}
 
 	var priorBudgets []VKBudgetModel
-	var priorRateLimit *VKRateLimitModel
 	if prior != nil {
 		priorBudgets = prior.Budgets
-		priorRateLimit = prior.RateLimit
 	}
 	m.Budgets = apiRespToBudgets(apiResp.Budgets, priorBudgets)
-	m.RateLimit = apiRespToRateLimitModel(apiResp.RateLimit, priorRateLimit)
+	m.RateLimit = apiRespToRateLimitModel(apiResp.RateLimit)
 
 	priorPCByProvider := map[string]VKProviderConfigModel{}
 	if prior != nil {
@@ -566,14 +564,15 @@ func vkResponseToModel(apiResp *bifrostclient.VirtualKeyResponse, prior *Virtual
 // multi-budget updates), letting us preserve prior `calendar_aligned` when the
 // server silently downgrades it to false.
 //
-// When the API omits or returns an empty budgets list, we fall back to the prior
-// plan value so post-apply state still matches the planned value (avoiding
-// "Provider produced inconsistent result after apply"). The plan vs server
-// drift between budgets is a separate follow-up; this preserves the previous
-// v1.5.0 BC6 behavior for the top-level case.
+// An empty server list is reported as-is so budgets removed outside Terraform
+// show up as drift. It stays an empty (non-nil) list when prior had one, so a
+// configured `budgets = []` doesn't flip to null.
 func apiRespToBudgets(bs []bifrostclient.VKBudget, prior []VKBudgetModel) []VKBudgetModel {
 	if len(bs) == 0 {
-		return prior
+		if prior == nil {
+			return nil
+		}
+		return []VKBudgetModel{}
 	}
 	priorByDuration := map[string]VKBudgetModel{}
 	for _, pb := range prior {
@@ -594,12 +593,12 @@ func apiRespToBudgets(bs []bifrostclient.VKBudget, prior []VKBudgetModel) []VKBu
 	return out
 }
 
-// apiRespToRateLimitModel mirrors apiRespToBudgetModel's contract: a nil
-// API value falls back to the plan-side value so the response can omit
-// `rate_limit` (as v1.5.0's VirtualKey schema does) without poisoning state.
-func apiRespToRateLimitModel(rl *bifrostclient.VKRateLimit, prior *VKRateLimitModel) *VKRateLimitModel {
+// apiRespToRateLimitModel maps the API rate limit into TF state. A nil API
+// value is reported as-is so a rate limit removed outside Terraform shows up
+// as drift.
+func apiRespToRateLimitModel(rl *bifrostclient.VKRateLimit) *VKRateLimitModel {
 	if rl == nil {
-		return prior
+		return nil
 	}
 	m := &VKRateLimitModel{
 		TokenMaxLimit:        types.Int64Null(),
@@ -637,6 +636,6 @@ func apiRespToVKProviderConfigModel(pc bifrostclient.VKProviderConfigResponse, p
 		m.AllowedModels = append(m.AllowedModels, types.StringValue(am))
 	}
 	m.Budgets = apiRespToBudgets(pc.Budgets, prior.Budgets)
-	m.RateLimit = apiRespToRateLimitModel(pc.RateLimit, prior.RateLimit)
+	m.RateLimit = apiRespToRateLimitModel(pc.RateLimit)
 	return m
 }

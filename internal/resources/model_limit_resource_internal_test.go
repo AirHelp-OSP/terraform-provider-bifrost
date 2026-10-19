@@ -46,6 +46,20 @@ func TestModelLimitResponseToModel_NullOptionals(t *testing.T) {
 	}
 }
 
+// TestApiRespToBudgets_EmptyServerListIsDrift guards against budgets removed
+// outside Terraform being masked by prior state.
+func TestApiRespToBudgets_EmptyServerListIsDrift(t *testing.T) {
+	prior := []VKBudgetModel{{MaxLimit: types.Float64Value(100), ResetDuration: types.StringValue("1M")}}
+
+	got := apiRespToBudgets(nil, prior)
+	if got == nil || len(got) != 0 {
+		t.Errorf("empty server list with configured budgets must yield an empty list, got %#v", got)
+	}
+	if got := apiRespToBudgets(nil, nil); got != nil {
+		t.Errorf("empty server list with no configured budgets must stay null, got %#v", got)
+	}
+}
+
 // TestModelLimitResponseToModel_PreservesCalendarAligned covers Bifrost not
 // echoing calendar_aligned on budgets, which would otherwise produce a
 // perpetual diff for calendar-aligned budgets.

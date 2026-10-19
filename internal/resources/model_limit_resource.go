@@ -253,12 +253,10 @@ func modelLimitResponseToModel(apiResp *bifrostclient.ModelConfigResponse, prior
 		ScopeID:   types.StringPointerValue(apiResp.ScopeID),
 	}
 	var priorBudgets []VKBudgetModel
-	var priorRateLimit *VKRateLimitModel
 	if prior != nil {
 		priorBudgets = prior.Budgets
-		priorRateLimit = prior.RateLimit
 	}
 	m.Budgets = apiRespToBudgets(apiResp.Budgets, priorBudgets)
-	m.RateLimit = apiRespToRateLimitModel(apiResp.RateLimit, priorRateLimit)
+	m.RateLimit = apiRespToRateLimitModel(apiResp.RateLimit)
 	return m
 }
