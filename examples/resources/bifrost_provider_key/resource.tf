@@ -56,3 +56,15 @@ resource "bifrost_provider_key" "openai_secondary" {
   models        = ["*"] # allow all models (v1.5.0: [] now means deny-all)
   weight        = 0.3
 }
+
+# Cloudflare Workers AI key: `value` is the Cloudflare API token and
+# cloudflare_key_config.account_id (required by Bifrost) selects the account.
+resource "bifrost_provider_key" "cloudflare" {
+  provider_name = bifrost_provider.cloudflare.provider_name
+  name          = "primary"
+  value         = "env.CLOUDFLARE_API_TOKEN"
+
+  cloudflare_key_config = {
+    account_id = "env.CLOUDFLARE_ACCOUNT_ID"
+  }
+}

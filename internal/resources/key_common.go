@@ -212,6 +212,29 @@ func modelToBedrockKeyConfig(m *BedrockKeyConfigModel) *schemas.BedrockKeyConfig
 	return bkc
 }
 
+// CloudflareKeyConfigModel mirrors the Cloudflare Workers AI key configuration
+// (Bifrost v2.x). Every Cloudflare key must name the account it targets.
+type CloudflareKeyConfigModel struct {
+	AccountID types.String `tfsdk:"account_id"`
+}
+
+func cloudflareKeyConfigToModel(ckc *schemas.CloudflareKeyConfig, prior *CloudflareKeyConfigModel) *CloudflareKeyConfigModel {
+	if prior != nil {
+		return prior
+	}
+	return &CloudflareKeyConfigModel{
+		AccountID: envVarToString(&ckc.AccountID, types.StringNull()),
+	}
+}
+
+func modelToCloudflareKeyConfig(m *CloudflareKeyConfigModel) *schemas.CloudflareKeyConfig {
+	ckc := &schemas.CloudflareKeyConfig{}
+	if !m.AccountID.IsNull() && !m.AccountID.IsUnknown() {
+		ckc.AccountID = *schemas.NewSecretVar(m.AccountID.ValueString())
+	}
+	return ckc
+}
+
 // ── Model aliases (Bifrost v1.6.x AliasConfig) ────────────────────────────────
 //
 // Bifrost v1.6.0 replaced the string-valued alias map with a rich AliasConfig

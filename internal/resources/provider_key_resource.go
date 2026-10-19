@@ -51,17 +51,18 @@ type ProviderKeyResource struct {
 // ── Model ────────────────────────────────────────────────────────────────────
 
 type ProviderKeyResourceModel struct {
-	ID               types.String           `tfsdk:"id"`
-	ProviderName     types.String           `tfsdk:"provider_name"`
-	Name             types.String           `tfsdk:"name"`
-	KeyID            types.String           `tfsdk:"key_id"`
-	Value            types.String           `tfsdk:"value"`
-	ValueSHA256      types.String           `tfsdk:"value_sha256"`
-	Models           types.List             `tfsdk:"models"`
-	ModelAliases     types.Map              `tfsdk:"model_aliases"`
-	Weight           types.Float64          `tfsdk:"weight"`
-	Enabled          types.Bool             `tfsdk:"enabled"`
-	BedrockKeyConfig *BedrockKeyConfigModel `tfsdk:"bedrock_key_config"`
+	ID                  types.String              `tfsdk:"id"`
+	ProviderName        types.String              `tfsdk:"provider_name"`
+	Name                types.String              `tfsdk:"name"`
+	KeyID               types.String              `tfsdk:"key_id"`
+	Value               types.String              `tfsdk:"value"`
+	ValueSHA256         types.String              `tfsdk:"value_sha256"`
+	Models              types.List                `tfsdk:"models"`
+	ModelAliases        types.Map                 `tfsdk:"model_aliases"`
+	Weight              types.Float64             `tfsdk:"weight"`
+	Enabled             types.Bool                `tfsdk:"enabled"`
+	BedrockKeyConfig    *BedrockKeyConfigModel    `tfsdk:"bedrock_key_config"`
+	CloudflareKeyConfig *CloudflareKeyConfigModel `tfsdk:"cloudflare_key_config"`
 }
 
 // ── Schema ────────────────────────────────────────────────────────────────────
@@ -75,6 +76,19 @@ func (r *ProviderKeyResource) Schema(_ context.Context, _ resource.SchemaRequest
 	attrs["value"] = valueWriteOnlyAttribute()
 	attrs["value_sha256"] = valueSHA256Attribute()
 	attrs["model_aliases"] = modelAliasesNestedAttribute()
+	attrs["cloudflare_key_config"] = schema.SingleNestedAttribute{
+		MarkdownDescription: "Cloudflare Workers AI-specific key configuration (Bifrost v2.x). Required by " +
+			"Bifrost for keys on the `cloudflare` provider; the API token itself goes in `value`.",
+		Description: "Cloudflare Workers AI-specific key configuration.",
+		Optional:    true,
+		Attributes: map[string]schema.Attribute{
+			"account_id": schema.StringAttribute{
+				MarkdownDescription: "Cloudflare account ID the key targets. Supports `env.VAR_NAME` references.",
+				Description:         "Cloudflare account ID the key targets.",
+				Required:            true,
+			},
+		},
+	}
 
 	resp.Schema = schema.Schema{
 		Version: 2,
@@ -347,8 +361,11 @@ func (v inferenceProfileARNRequiresBedrock) MarkdownDescription(ctx context.Cont
 }
 
 func (inferenceProfileARNRequiresBedrock) ValidateResource(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	// Read only the attributes checked here: decoding the whole config into
+	// ProviderKeyResourceModel fails when a nested block is still unknown.
 	var cfg ProviderKeyResourceModel
-	resp.Diagnostics.Append(req.Config.Get(ctx, &cfg)...)
+	resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("provider_name"), &cfg.ProviderName)...)
+	resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("model_aliases"), &cfg.ModelAliases)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -878,6 +895,9 @@ func providerKeyModelToAPI(ctx context.Context, m *ProviderKeyResourceModel, val
 	if m.BedrockKeyConfig != nil {
 		k.BedrockKeyConfig = modelToBedrockKeyConfig(m.BedrockKeyConfig)
 	}
+	if m.CloudflareKeyConfig != nil {
+		k.CloudflareKeyConfig = modelToCloudflareKeyConfig(m.CloudflareKeyConfig)
+	}
 
 	return k, diags
 }
@@ -942,6 +962,16 @@ func apiKeyToProviderKeyModel(ctx context.Context, apiKey *schemas.Key, prior *P
 			priorBedrock = prior.BedrockKeyConfig
 		}
 		m.BedrockKeyConfig = bedrockKeyConfigToModel(apiKey.BedrockKeyConfig, priorBedrock)
+	}
+
+	var priorCloudflare *CloudflareKeyConfigModel
+	if prior != nil {
+		priorCloudflare = prior.CloudflareKeyConfig
+	}
+	if apiKey.CloudflareKeyConfig == nil {
+		m.CloudflareKeyConfig = priorCloudflare
+	} else {
+		m.CloudflareKeyConfig = cloudflareKeyConfigToModel(apiKey.CloudflareKeyConfig, priorCloudflare)
 	}
 
 	return m
