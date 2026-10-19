@@ -33,6 +33,11 @@ variable "budget_limit" {
   default = 100
 }
 
+variable "calendar_aligned" {
+  type    = bool
+  default = false
+}
+
 provider "bifrost" {
   endpoint = var.endpoint
   username = var.username
@@ -40,9 +45,10 @@ provider "bifrost" {
 }
 
 resource "bifrost_virtual_key" "test" {
-  name        = var.vk_name
-  description = var.description
-  is_active   = true
+  name             = var.vk_name
+  description      = var.description
+  is_active        = true
+  calendar_aligned = var.calendar_aligned
 
   budgets = [
     {

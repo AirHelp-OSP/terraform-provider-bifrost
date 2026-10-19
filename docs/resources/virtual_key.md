@@ -15,15 +15,15 @@ Manages a [Bifrost virtual key](https://github.com/maximhq/bifrost) — a govern
 ```terraform
 # Virtual key with budget and rate limit, balanced across two providers.
 resource "bifrost_virtual_key" "team_key" {
-  name        = "team-alpha-key"
-  description = "Virtual key for Team Alpha with monthly budget"
-  is_active   = true
+  name             = "team-alpha-key"
+  description      = "Virtual key for Team Alpha with monthly budget"
+  is_active        = true
+  calendar_aligned = true
 
   budgets = [
     {
-      max_limit        = 500.0
-      reset_duration   = "1M"
-      calendar_aligned = true
+      max_limit      = 500.0
+      reset_duration = "1M"
     },
   ]
 
@@ -66,6 +66,7 @@ output "virtual_key_id" {
 ### Optional
 
 - `budgets` (Attributes List) Budget configurations. Bifrost v1.5.0+ supports multiple budgets per virtual key (or per provider config) as long as each entry has a unique `reset_duration`. `reset_duration` accepts Bifrost duration strings such as `1d`, `1w`, or `1M`. Sending an empty list clears all existing budgets on update. (see [below for nested schema](#nestedatt--budgets))
+- `calendar_aligned` (Boolean) Reset all of this key's budgets (including per-provider-config ones) at calendar boundaries in UTC (start of day/week/month/quarter/year) instead of on a rolling window. Only applies to `d`, `w`, `M`, `Q` and `Y` durations. Defaults to `false`.
 - `customer_id` (String) Customer UUID to associate with this key. **Mutually exclusive** with `team_id`. _Note: customers are an enterprise feature._
 - `description` (String) Optional description.
 - `is_active` (Boolean) Whether the virtual key is active. Defaults to `true`.
@@ -88,7 +89,7 @@ Required:
 
 Optional:
 
-- `calendar_aligned` (Boolean) Snap resets to calendar boundaries (start of day/week/month) instead of rolling. Defaults to `false`.
+- `calendar_aligned` (Boolean, Deprecated) **Deprecated**: Bifrost ignores calendar alignment on individual budgets. Use the virtual key's top-level `calendar_aligned` instead.
 
 
 <a id="nestedatt--provider_configs"></a>
@@ -116,7 +117,7 @@ Required:
 
 Optional:
 
-- `calendar_aligned` (Boolean) Snap resets to calendar boundaries (start of day/week/month) instead of rolling. Defaults to `false`.
+- `calendar_aligned` (Boolean, Deprecated) **Deprecated**: Bifrost ignores calendar alignment on individual budgets. Use the virtual key's top-level `calendar_aligned` instead.
 
 
 <a id="nestedatt--provider_configs--rate_limit"></a>
@@ -124,9 +125,9 @@ Optional:
 
 Optional:
 
-- `request_max_limit` (Number) Maximum request count per window.
+- `request_max_limit` (Number) Maximum request count per window. At least one of `token_max_limit` and `request_max_limit` must be set.
 - `request_reset_duration` (String) Request-limit reset window (e.g. `1m`, `1h`).
-- `token_max_limit` (Number) Maximum token count per window.
+- `token_max_limit` (Number) Maximum token count per window. At least one of `token_max_limit` and `request_max_limit` must be set.
 - `token_reset_duration` (String) Token-limit reset window (e.g. `1m`, `1h`).
 
 
@@ -136,9 +137,9 @@ Optional:
 
 Optional:
 
-- `request_max_limit` (Number) Maximum request count per window.
+- `request_max_limit` (Number) Maximum request count per window. At least one of `token_max_limit` and `request_max_limit` must be set.
 - `request_reset_duration` (String) Request-limit reset window (e.g. `1m`, `1h`).
-- `token_max_limit` (Number) Maximum token count per window.
+- `token_max_limit` (Number) Maximum token count per window. At least one of `token_max_limit` and `request_max_limit` must be set.
 - `token_reset_duration` (String) Token-limit reset window (e.g. `1m`, `1h`).
 
 ## Import

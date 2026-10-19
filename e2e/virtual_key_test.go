@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"testing"
@@ -132,4 +133,112 @@ func assertVKBudget(t *testing.T, vkID string, wantMax float64, wantReset string
 	if got.ResetDuration != wantReset {
 		t.Errorf("budget.reset_duration for vk %s: got %q, want %q", vkID, got.ResetDuration, wantReset)
 	}
+}
+
+// TestBifrostVirtualKeyCalendarAligned guards that calendar alignment reaches
+// Bifrost. It used to be set per budget, which Bifrost's HTTP API ignores, while
+// the provider kept the configured value in state so the plan stayed clean.
+func TestBifrostVirtualKeyCalendarAligned(t *testing.T) {
+	tfDir := test_structure.CopyTerraformFolderToTemp(t, ".", "testdata/virtual_key")
+
+	opts := modelLimitOptions(tfDir, map[string]interface{}{
+		"vk_name":          "e2e-vk-calendar",
+		"calendar_aligned": true,
+	})
+	defer terraform.Destroy(t, opts)
+
+	terraform.Apply(t, opts)
+	vkID := terraform.Output(t, opts, "vk_id")
+	if !getVKCalendarAligned(t, vkID) {
+		t.Error("after create: calendar_aligned not set on the server")
+	}
+	assertCleanPlan(t, opts, "create")
+
+	bifrostPut(t, "/api/governance/virtual-keys/"+vkID, `{"calendar_aligned":false}`)
+	assertDriftDetected(t, opts, "calendar_aligned")
+	terraform.Apply(t, opts)
+	if !getVKCalendarAligned(t, vkID) {
+		t.Error("drift repair did not restore calendar_aligned")
+	}
+
+	opts.Vars["calendar_aligned"] = false
+	terraform.Apply(t, opts)
+	if getVKCalendarAligned(t, vkID) {
+		t.Error("after disabling: calendar_aligned still set on the server")
+	}
+	assertCleanPlan(t, opts, "disable")
+}
+
+func getVKCalendarAligned(t *testing.T, vkID string) bool {
+	t.Helper()
+	var envelope struct {
+		VirtualKey struct {
+			CalendarAligned bool `json:"calendar_aligned"`
+		} `json:"virtual_key"`
+	}
+	body := bifrostGet(t, "/api/governance/virtual-keys/"+vkID)
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		t.Fatalf("decode virtual key: %v (body=%s)", err, string(body))
+	}
+	return envelope.VirtualKey.CalendarAligned
+}
+
+// TestBifrostVirtualKeyKeyIDs guards that key_ids are read back from Bifrost.
+// They used to be copied from prior state, so keys unassigned outside
+// Terraform never showed up as drift.
+func TestBifrostVirtualKeyKeyIDs(t *testing.T) {
+	tfDir := test_structure.CopyTerraformFolderToTemp(t, ".", "testdata/virtual_key_keys")
+
+	opts := modelLimitOptions(tfDir, map[string]interface{}{})
+	defer terraform.Destroy(t, opts)
+
+	terraform.Apply(t, opts)
+	vkID := terraform.Output(t, opts, "vk_id")
+	if got := len(getVKProviderConfigKeys(t, vkID)); got != 2 {
+		t.Errorf("after create: expected 2 keys on the provider config, got %d", got)
+	}
+	assertCleanPlan(t, opts, "create")
+
+	providerName := terraform.Output(t, opts, "provider_name")
+	bifrostPut(t, "/api/governance/virtual-keys/"+vkID, fmt.Sprintf(
+		`{"provider_configs":[{"provider":%q,"allowed_models":["*"],"key_ids":[%q]}]}`,
+		providerName, terraform.Output(t, opts, "first_key_id")))
+	if got := len(getVKProviderConfigKeys(t, vkID)); got != 1 {
+		t.Fatalf("out-of-band change did not unassign a key, %d keys left", got)
+	}
+	assertDriftDetected(t, opts, "key_ids")
+	terraform.Apply(t, opts)
+	if got := len(getVKProviderConfigKeys(t, vkID)); got != 2 {
+		t.Errorf("drift repair did not restore both keys, got %d", got)
+	}
+	assertCleanPlan(t, opts, "key_ids drift repair")
+
+	opts.Vars["key_names"] = []string{"*"}
+	terraform.Apply(t, opts)
+	assertCleanPlan(t, opts, "key_ids = [\"*\"]")
+}
+
+func getVKProviderConfigKeys(t *testing.T, vkID string) []string {
+	t.Helper()
+	var envelope struct {
+		VirtualKey struct {
+			ProviderConfigs []struct {
+				Keys []struct {
+					KeyID string `json:"key_id"`
+				} `json:"keys"`
+			} `json:"provider_configs"`
+		} `json:"virtual_key"`
+	}
+	body := bifrostGet(t, "/api/governance/virtual-keys/"+vkID)
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		t.Fatalf("decode virtual key: %v (body=%s)", err, string(body))
+	}
+	if len(envelope.VirtualKey.ProviderConfigs) != 1 {
+		t.Fatalf("expected 1 provider config, got %d (body=%s)", len(envelope.VirtualKey.ProviderConfigs), string(body))
+	}
+	var ids []string
+	for _, k := range envelope.VirtualKey.ProviderConfigs[0].Keys {
+		ids = append(ids, k.KeyID)
+	}
+	return ids
 }

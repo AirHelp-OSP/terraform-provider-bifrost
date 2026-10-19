@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/resourcevalidator"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -46,6 +47,7 @@ type VirtualKeyResourceModel struct {
 	ProviderConfigs []VKProviderConfigModel `tfsdk:"provider_configs"`
 	Budgets         []VKBudgetModel         `tfsdk:"budgets"`
 	RateLimit       *VKRateLimitModel       `tfsdk:"rate_limit"`
+	CalendarAligned types.Bool              `tfsdk:"calendar_aligned"`
 }
 
 type VKProviderConfigModel struct {
@@ -95,11 +97,13 @@ var budgetsSchema = schema.ListNestedAttribute{
 				Required:            true,
 			},
 			"calendar_aligned": schema.BoolAttribute{
-				MarkdownDescription: "Snap resets to calendar boundaries (start of day/week/month) instead of rolling. Defaults to `false`.",
-				Description:         "Snap resets to calendar boundaries.",
-				Optional:            true,
-				Computed:            true,
-				Default:             booldefault.StaticBool(false),
+				MarkdownDescription: "**Deprecated**: Bifrost ignores calendar alignment on individual budgets. " +
+					"Use the virtual key's top-level `calendar_aligned` instead.",
+				Description:        "Deprecated: ignored by Bifrost; use the virtual key's top-level calendar_aligned.",
+				DeprecationMessage: "Bifrost ignores calendar alignment on individual budgets. Set calendar_aligned on the bifrost_virtual_key itself instead.",
+				Optional:           true,
+				Computed:           true,
+				Default:            booldefault.StaticBool(false),
 			},
 		},
 	},
@@ -111,9 +115,14 @@ var rateLimitSchema = schema.SingleNestedAttribute{
 	Optional:            true,
 	Attributes: map[string]schema.Attribute{
 		"token_max_limit": schema.Int64Attribute{
-			MarkdownDescription: "Maximum token count per window.",
+			MarkdownDescription: "Maximum token count per window. At least one of `token_max_limit` and `request_max_limit` must be set.",
 			Description:         "Maximum token count per window.",
 			Optional:            true,
+			Validators: []validator.Int64{
+				// Bifrost deletes a rate limit with neither max limit set, which
+				// would leave state without the planned rate_limit block.
+				int64validator.AtLeastOneOf(path.MatchRelative().AtParent().AtName("request_max_limit")),
+			},
 		},
 		"token_reset_duration": schema.StringAttribute{
 			MarkdownDescription: "Token-limit reset window (e.g. `1m`, `1h`).",
@@ -121,7 +130,7 @@ var rateLimitSchema = schema.SingleNestedAttribute{
 			Optional:            true,
 		},
 		"request_max_limit": schema.Int64Attribute{
-			MarkdownDescription: "Maximum request count per window.",
+			MarkdownDescription: "Maximum request count per window. At least one of `token_max_limit` and `request_max_limit` must be set.",
 			Description:         "Maximum request count per window.",
 			Optional:            true,
 		},
@@ -237,6 +246,15 @@ func (r *VirtualKeyResource) Schema(_ context.Context, _ resource.SchemaRequest,
 			},
 			"budgets":    budgetsSchema,
 			"rate_limit": rateLimitSchema,
+			"calendar_aligned": schema.BoolAttribute{
+				MarkdownDescription: "Reset all of this key's budgets (including per-provider-config ones) at calendar " +
+					"boundaries in UTC (start of day/week/month/quarter/year) instead of on a rolling window. " +
+					"Only applies to `d`, `w`, `M`, `Q` and `Y` durations. Defaults to `false`.",
+				Description: "Reset all budgets at calendar boundaries instead of on a rolling window.",
+				Optional:    true,
+				Computed:    true,
+				Default:     booldefault.StaticBool(false),
+			},
 		},
 	}
 }
@@ -371,8 +389,9 @@ func (r *VirtualKeyResource) ImportState(ctx context.Context, req resource.Impor
 
 func vkModelToCreateRequest(m VirtualKeyResourceModel) bifrostclient.CreateVirtualKeyRequest {
 	req := bifrostclient.CreateVirtualKeyRequest{
-		Name:        m.Name.ValueString(),
-		Description: m.Description.ValueString(),
+		Name:            m.Name.ValueString(),
+		Description:     m.Description.ValueString(),
+		CalendarAligned: m.CalendarAligned.ValueBool(),
 	}
 
 	if !m.IsActive.IsNull() && !m.IsActive.IsUnknown() {
@@ -403,8 +422,9 @@ func vkModelToUpdateRequest(m VirtualKeyResourceModel) bifrostclient.UpdateVirtu
 	name := m.Name.ValueString()
 	desc := m.Description.ValueString()
 	req := bifrostclient.UpdateVirtualKeyRequest{
-		Name:        &name,
-		Description: &desc,
+		Name:            &name,
+		Description:     &desc,
+		CalendarAligned: m.CalendarAligned.ValueBoolPointer(),
 	}
 
 	if !m.IsActive.IsNull() && !m.IsActive.IsUnknown() {
@@ -456,9 +476,8 @@ func modelToBudgets(ms []VKBudgetModel) []bifrostclient.VKBudget {
 	out := make([]bifrostclient.VKBudget, 0, len(ms))
 	for _, m := range ms {
 		out = append(out, bifrostclient.VKBudget{
-			MaxLimit:        m.MaxLimit.ValueFloat64(),
-			ResetDuration:   m.ResetDuration.ValueString(),
-			CalendarAligned: m.CalendarAligned.ValueBool(),
+			MaxLimit:      m.MaxLimit.ValueFloat64(),
+			ResetDuration: m.ResetDuration.ValueString(),
 		})
 	}
 	return out
@@ -512,10 +531,11 @@ func modelToVKProviderConfigCreate(pc VKProviderConfigModel) bifrostclient.VKPro
 // from prior state (the API does not return it after create).
 func vkResponseToModel(apiResp *bifrostclient.VirtualKeyResponse, prior *VirtualKeyResourceModel) *VirtualKeyResourceModel {
 	m := &VirtualKeyResourceModel{
-		ID:          types.StringValue(apiResp.ID),
-		Name:        types.StringValue(apiResp.Name),
-		Description: types.StringValue(apiResp.Description),
-		IsActive:    types.BoolValue(apiResp.IsActive),
+		ID:              types.StringValue(apiResp.ID),
+		Name:            types.StringValue(apiResp.Name),
+		Description:     types.StringValue(apiResp.Description),
+		IsActive:        types.BoolValue(apiResp.IsActive),
+		CalendarAligned: types.BoolValue(apiResp.CalendarAligned),
 	}
 
 	if apiResp.Value != "" {
@@ -538,13 +558,11 @@ func vkResponseToModel(apiResp *bifrostclient.VirtualKeyResponse, prior *Virtual
 	}
 
 	var priorBudgets []VKBudgetModel
-	var priorRateLimit *VKRateLimitModel
 	if prior != nil {
 		priorBudgets = prior.Budgets
-		priorRateLimit = prior.RateLimit
 	}
 	m.Budgets = apiRespToBudgets(apiResp.Budgets, priorBudgets)
-	m.RateLimit = apiRespToRateLimitModel(apiResp.RateLimit, priorRateLimit)
+	m.RateLimit = apiRespToRateLimitModel(apiResp.RateLimit)
 
 	priorPCByProvider := map[string]VKProviderConfigModel{}
 	if prior != nil {
@@ -562,18 +580,19 @@ func vkResponseToModel(apiResp *bifrostclient.VirtualKeyResponse, prior *Virtual
 
 // apiRespToBudgets converts the budgets list from an API response into TF state.
 //
-// Matching is keyed by reset_duration (the same key the server uses to reconcile
-// multi-budget updates), letting us preserve prior `calendar_aligned` when the
-// server silently downgrades it to false.
+// The deprecated per-budget `calendar_aligned` is never stored by Bifrost, so it
+// is carried over from prior state, matched by reset_duration (the key the
+// server reconciles budgets on), and defaults to false.
 //
-// When the API omits or returns an empty budgets list, we fall back to the prior
-// plan value so post-apply state still matches the planned value (avoiding
-// "Provider produced inconsistent result after apply"). The plan vs server
-// drift between budgets is a separate follow-up; this preserves the previous
-// v1.5.0 BC6 behavior for the top-level case.
+// An empty server list is reported as-is so budgets removed outside Terraform
+// show up as drift. It stays an empty (non-nil) list when prior had one, so a
+// configured `budgets = []` doesn't flip to null.
 func apiRespToBudgets(bs []bifrostclient.VKBudget, prior []VKBudgetModel) []VKBudgetModel {
 	if len(bs) == 0 {
-		return prior
+		if prior == nil {
+			return nil
+		}
+		return []VKBudgetModel{}
 	}
 	priorByDuration := map[string]VKBudgetModel{}
 	for _, pb := range prior {
@@ -581,8 +600,8 @@ func apiRespToBudgets(bs []bifrostclient.VKBudget, prior []VKBudgetModel) []VKBu
 	}
 	out := make([]VKBudgetModel, 0, len(bs))
 	for _, b := range bs {
-		calAligned := types.BoolValue(b.CalendarAligned)
-		if pb, ok := priorByDuration[b.ResetDuration]; ok && !b.CalendarAligned && pb.CalendarAligned.ValueBool() {
+		calAligned := types.BoolValue(false)
+		if pb, ok := priorByDuration[b.ResetDuration]; ok {
 			calAligned = pb.CalendarAligned
 		}
 		out = append(out, VKBudgetModel{
@@ -594,12 +613,12 @@ func apiRespToBudgets(bs []bifrostclient.VKBudget, prior []VKBudgetModel) []VKBu
 	return out
 }
 
-// apiRespToRateLimitModel mirrors apiRespToBudgetModel's contract: a nil
-// API value falls back to the plan-side value so the response can omit
-// `rate_limit` (as v1.5.0's VirtualKey schema does) without poisoning state.
-func apiRespToRateLimitModel(rl *bifrostclient.VKRateLimit, prior *VKRateLimitModel) *VKRateLimitModel {
+// apiRespToRateLimitModel maps the API rate limit into TF state. A nil API
+// value is reported as-is so a rate limit removed outside Terraform shows up
+// as drift.
+func apiRespToRateLimitModel(rl *bifrostclient.VKRateLimit) *VKRateLimitModel {
 	if rl == nil {
-		return prior
+		return nil
 	}
 	m := &VKRateLimitModel{
 		TokenMaxLimit:        types.Int64Null(),
@@ -623,12 +642,10 @@ func apiRespToRateLimitModel(rl *bifrostclient.VKRateLimit, prior *VKRateLimitMo
 }
 
 // apiRespToVKProviderConfigModel maps an API provider-config entry into TF state.
-// key_ids are not returned by Bifrost, so they are preserved from prior state to
-// avoid perpetual drift.
 func apiRespToVKProviderConfigModel(pc bifrostclient.VKProviderConfigResponse, prior VKProviderConfigModel) VKProviderConfigModel {
 	m := VKProviderConfigModel{
 		Provider: types.StringValue(pc.Provider),
-		KeyIDs:   prior.KeyIDs,
+		KeyIDs:   apiRespToKeyIDs(pc, prior.KeyIDs),
 	}
 	if pc.Weight != nil {
 		m.Weight = types.Float64Value(*pc.Weight)
@@ -637,6 +654,41 @@ func apiRespToVKProviderConfigModel(pc bifrostclient.VKProviderConfigResponse, p
 		m.AllowedModels = append(m.AllowedModels, types.StringValue(am))
 	}
 	m.Budgets = apiRespToBudgets(pc.Budgets, prior.Budgets)
-	m.RateLimit = apiRespToRateLimitModel(pc.RateLimit, prior.RateLimit)
+	m.RateLimit = apiRespToRateLimitModel(pc.RateLimit)
 	return m
+}
+
+// apiRespToKeyIDs maps a provider config's key assignment to key_ids, with
+// allow_all_keys as ["*"]. Bifrost doesn't keep the configured order, so prior
+// is returned as-is when it holds the same IDs.
+func apiRespToKeyIDs(pc bifrostclient.VKProviderConfigResponse, prior []types.String) []types.String {
+	ids := make([]string, 0, len(pc.Keys))
+	if pc.AllowAllKeys {
+		ids = append(ids, "*")
+	} else {
+		for _, k := range pc.Keys {
+			ids = append(ids, k.KeyID)
+		}
+	}
+	if len(ids) == 0 {
+		if prior == nil {
+			return nil
+		}
+		return []types.String{}
+	}
+
+	priorSet := make(map[string]bool, len(prior))
+	for _, p := range prior {
+		priorSet[p.ValueString()] = true
+	}
+	same := len(ids) == len(priorSet)
+	out := make([]types.String, 0, len(ids))
+	for _, id := range ids {
+		same = same && priorSet[id]
+		out = append(out, types.StringValue(id))
+	}
+	if same {
+		return prior
+	}
+	return out
 }

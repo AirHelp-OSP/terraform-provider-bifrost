@@ -35,14 +35,16 @@ func (wildcardNotMixedValidator) ValidateList(ctx context.Context, req validator
 	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
 		return
 	}
-	var vals []string
+	// types.String rather than string: elements are unknown at plan time when
+	// they reference attributes computed in the same apply (e.g. a key_id).
+	var vals []types.String
 	resp.Diagnostics.Append(req.ConfigValue.ElementsAs(ctx, &vals, false)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 	hasWildcard := false
 	for _, s := range vals {
-		if s == "*" {
+		if s.ValueString() == "*" {
 			hasWildcard = true
 			break
 		}

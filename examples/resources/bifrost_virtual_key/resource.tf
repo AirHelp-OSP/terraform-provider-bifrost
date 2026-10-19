@@ -1,14 +1,14 @@
 # Virtual key with budget and rate limit, balanced across two providers.
 resource "bifrost_virtual_key" "team_key" {
-  name        = "team-alpha-key"
-  description = "Virtual key for Team Alpha with monthly budget"
-  is_active   = true
+  name             = "team-alpha-key"
+  description      = "Virtual key for Team Alpha with monthly budget"
+  is_active        = true
+  calendar_aligned = true
 
   budgets = [
     {
-      max_limit        = 500.0
-      reset_duration   = "1M"
-      calendar_aligned = true
+      max_limit      = 500.0
+      reset_duration = "1M"
     },
   ]
 
