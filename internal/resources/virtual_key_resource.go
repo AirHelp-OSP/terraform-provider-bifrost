@@ -636,12 +636,10 @@ func apiRespToRateLimitModel(rl *bifrostclient.VKRateLimit) *VKRateLimitModel {
 }
 
 // apiRespToVKProviderConfigModel maps an API provider-config entry into TF state.
-// key_ids are not returned by Bifrost, so they are preserved from prior state to
-// avoid perpetual drift.
 func apiRespToVKProviderConfigModel(pc bifrostclient.VKProviderConfigResponse, prior VKProviderConfigModel) VKProviderConfigModel {
 	m := VKProviderConfigModel{
 		Provider: types.StringValue(pc.Provider),
-		KeyIDs:   prior.KeyIDs,
+		KeyIDs:   apiRespToKeyIDs(pc, prior.KeyIDs),
 	}
 	if pc.Weight != nil {
 		m.Weight = types.Float64Value(*pc.Weight)
@@ -652,4 +650,39 @@ func apiRespToVKProviderConfigModel(pc bifrostclient.VKProviderConfigResponse, p
 	m.Budgets = apiRespToBudgets(pc.Budgets, prior.Budgets)
 	m.RateLimit = apiRespToRateLimitModel(pc.RateLimit)
 	return m
+}
+
+// apiRespToKeyIDs maps a provider config's key assignment to key_ids, with
+// allow_all_keys as ["*"]. Bifrost doesn't keep the configured order, so prior
+// is returned as-is when it holds the same IDs.
+func apiRespToKeyIDs(pc bifrostclient.VKProviderConfigResponse, prior []types.String) []types.String {
+	ids := make([]string, 0, len(pc.Keys))
+	if pc.AllowAllKeys {
+		ids = append(ids, "*")
+	} else {
+		for _, k := range pc.Keys {
+			ids = append(ids, k.KeyID)
+		}
+	}
+	if len(ids) == 0 {
+		if prior == nil {
+			return nil
+		}
+		return []types.String{}
+	}
+
+	priorSet := make(map[string]bool, len(prior))
+	for _, p := range prior {
+		priorSet[p.ValueString()] = true
+	}
+	same := len(ids) == len(priorSet)
+	out := make([]types.String, 0, len(ids))
+	for _, id := range ids {
+		same = same && priorSet[id]
+		out = append(out, types.StringValue(id))
+	}
+	if same {
+		return prior
+	}
+	return out
 }

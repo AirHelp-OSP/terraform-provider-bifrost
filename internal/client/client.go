@@ -335,13 +335,21 @@ type VKProviderConfigCreate struct {
 }
 
 // VKProviderConfigResponse is a provider config entry in an API response.
+// Requested key_ids come back as Keys, or as AllowAllKeys for ["*"].
 type VKProviderConfigResponse struct {
-	ID            uint         `json:"id"`
-	Provider      string       `json:"provider"`
-	Weight        *float64     `json:"weight"`
-	AllowedModels []string     `json:"allowed_models"`
-	Budgets       []VKBudget   `json:"budgets,omitempty"`
-	RateLimit     *VKRateLimit `json:"rate_limit,omitempty"`
+	ID            uint                  `json:"id"`
+	Provider      string                `json:"provider"`
+	Weight        *float64              `json:"weight"`
+	AllowedModels []string              `json:"allowed_models"`
+	AllowAllKeys  bool                  `json:"allow_all_keys"`
+	Keys          []VKProviderConfigKey `json:"keys"`
+	Budgets       []VKBudget            `json:"budgets,omitempty"`
+	RateLimit     *VKRateLimit          `json:"rate_limit,omitempty"`
+}
+
+// VKProviderConfigKey is a provider key associated with a VK provider config.
+type VKProviderConfigKey struct {
+	KeyID string `json:"key_id"`
 }
 
 // VirtualKeyResponse mirrors the TableVirtualKey JSON structure returned by Bifrost.

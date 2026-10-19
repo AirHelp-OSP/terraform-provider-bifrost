@@ -58,3 +58,48 @@ func TestVKModelToUpdateRequest_CalendarAlignedAlwaysSent(t *testing.T) {
 		t.Errorf("update payload must carry calendar_aligned=false, got %s", body)
 	}
 }
+
+func TestApiRespToKeyIDs(t *testing.T) {
+	keys := func(ids ...string) []bifrostclient.VKProviderConfigKey {
+		out := []bifrostclient.VKProviderConfigKey{}
+		for _, id := range ids {
+			out = append(out, bifrostclient.VKProviderConfigKey{KeyID: id})
+		}
+		return out
+	}
+	strs := func(ids ...string) []types.String {
+		out := []types.String{}
+		for _, id := range ids {
+			out = append(out, types.StringValue(id))
+		}
+		return out
+	}
+
+	cases := []struct {
+		name  string
+		pc    bifrostclient.VKProviderConfigResponse
+		prior []types.String
+		want  []types.String
+	}{
+		{"allow all keys", bifrostclient.VKProviderConfigResponse{AllowAllKeys: true}, nil, strs("*")},
+		{"prior order kept for same set", bifrostclient.VKProviderConfigResponse{Keys: keys("a", "b")}, strs("b", "a"), strs("b", "a")},
+		{"key removed out of band", bifrostclient.VKProviderConfigResponse{Keys: keys("a")}, strs("a", "b"), strs("a")},
+		{"key added out of band", bifrostclient.VKProviderConfigResponse{Keys: keys("a", "b")}, strs("a"), strs("a", "b")},
+		{"no keys, unset in config", bifrostclient.VKProviderConfigResponse{}, nil, nil},
+		{"no keys, empty in config", bifrostclient.VKProviderConfigResponse{}, strs(), strs()},
+		{"keys removed out of band", bifrostclient.VKProviderConfigResponse{}, strs("a"), strs()},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := apiRespToKeyIDs(tc.pc, tc.prior)
+			if (got == nil) != (tc.want == nil) || len(got) != len(tc.want) {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if !got[i].Equal(tc.want[i]) {
+					t.Errorf("got %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}
