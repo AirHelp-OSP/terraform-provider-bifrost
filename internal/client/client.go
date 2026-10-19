@@ -439,3 +439,77 @@ func (c *BifrostClient) UpdateVirtualKey(ctx context.Context, id string, req Upd
 func (c *BifrostClient) DeleteVirtualKey(ctx context.Context, id string) error {
 	return c.doRequest(ctx, http.MethodDelete, "/api/governance/virtual-keys/"+url.PathEscape(id), nil, nil)
 }
+
+// ─── Model Config API types ───────────────────────────────────────────────────
+
+// ModelConfigResponse mirrors the ModelConfig JSON returned by Bifrost
+// ("model limits" in the UI): a standalone set of budgets and a rate limit
+// applied to a model, optionally narrowed to a provider and a scope.
+type ModelConfigResponse struct {
+	ID        string       `json:"id"`
+	ModelName string       `json:"model_name"`
+	Provider  *string      `json:"provider,omitempty"`
+	Scope     string       `json:"scope"`
+	ScopeID   *string      `json:"scope_id,omitempty"`
+	Budgets   []VKBudget   `json:"budgets,omitempty"`
+	RateLimit *VKRateLimit `json:"rate_limit,omitempty"`
+}
+
+type modelConfigEnvelope struct {
+	ModelConfig ModelConfigResponse `json:"model_config"`
+}
+
+// CreateModelConfigRequest is the payload for POST /api/governance/model-configs.
+type CreateModelConfigRequest struct {
+	ModelName string       `json:"model_name"`
+	Provider  *string      `json:"provider,omitempty"`
+	Scope     string       `json:"scope,omitempty"`
+	ScopeID   *string      `json:"scope_id,omitempty"`
+	Budgets   []VKBudget   `json:"budgets,omitempty"`
+	RateLimit *VKRateLimit `json:"rate_limit,omitempty"`
+}
+
+// UpdateModelConfigRequest is the payload for PUT /api/governance/model-configs/{id}.
+// Scope and scope_id cannot be changed in place.
+//
+// Budgets follows the same nil/[]/populated contract as UpdateVirtualKeyRequest.
+// RateLimit is cleared server-side when both max limits are nil, so callers send
+// an empty object to remove it.
+type UpdateModelConfigRequest struct {
+	ModelName *string      `json:"model_name,omitempty"`
+	Provider  *string      `json:"provider,omitempty"`
+	Budgets   []VKBudget   `json:"budgets"`
+	RateLimit *VKRateLimit `json:"rate_limit,omitempty"`
+}
+
+// CreateModelConfig calls POST /api/governance/model-configs.
+func (c *BifrostClient) CreateModelConfig(ctx context.Context, req CreateModelConfigRequest) (*ModelConfigResponse, error) {
+	var envelope modelConfigEnvelope
+	if err := c.doRequest(ctx, http.MethodPost, "/api/governance/model-configs", req, &envelope); err != nil {
+		return nil, err
+	}
+	return &envelope.ModelConfig, nil
+}
+
+// GetModelConfig calls GET /api/governance/model-configs/{id}.
+func (c *BifrostClient) GetModelConfig(ctx context.Context, id string) (*ModelConfigResponse, error) {
+	var envelope modelConfigEnvelope
+	if err := c.doRequest(ctx, http.MethodGet, "/api/governance/model-configs/"+url.PathEscape(id), nil, &envelope); err != nil {
+		return nil, err
+	}
+	return &envelope.ModelConfig, nil
+}
+
+// UpdateModelConfig calls PUT /api/governance/model-configs/{id}.
+func (c *BifrostClient) UpdateModelConfig(ctx context.Context, id string, req UpdateModelConfigRequest) (*ModelConfigResponse, error) {
+	var envelope modelConfigEnvelope
+	if err := c.doRequest(ctx, http.MethodPut, "/api/governance/model-configs/"+url.PathEscape(id), req, &envelope); err != nil {
+		return nil, err
+	}
+	return &envelope.ModelConfig, nil
+}
+
+// DeleteModelConfig calls DELETE /api/governance/model-configs/{id}.
+func (c *BifrostClient) DeleteModelConfig(ctx context.Context, id string) error {
+	return c.doRequest(ctx, http.MethodDelete, "/api/governance/model-configs/"+url.PathEscape(id), nil, nil)
+}

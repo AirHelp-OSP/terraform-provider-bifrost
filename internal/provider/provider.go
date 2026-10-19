@@ -164,6 +164,7 @@ func (p *BifrostProvider) Resources(_ context.Context) []func() resource.Resourc
 		resources.NewProviderResource,
 		resources.NewProviderKeyResource,
 		resources.NewVirtualKeyResource,
+		resources.NewModelLimitResource,
 	}
 }
 
