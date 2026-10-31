@@ -2,6 +2,7 @@ package resources
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -42,6 +43,28 @@ func TestApiRespToBudgets_DeprecatedCalendarAlignedFromPrior(t *testing.T) {
 	}
 	if got[1].CalendarAligned.IsNull() || got[1].CalendarAligned.ValueBool() {
 		t.Errorf("calendar_aligned without a prior budget must default to false, got %v", got[1].CalendarAligned)
+	}
+}
+
+// TestApiRespToBudgets_KeepsPriorOrder: Bifrost may return budgets in any
+// order; following the API order would show a perpetual diff (issue #14).
+func TestApiRespToBudgets_KeepsPriorOrder(t *testing.T) {
+	prior := []VKBudgetModel{
+		{MaxLimit: types.Float64Value(100), ResetDuration: types.StringValue("1M")},
+		{MaxLimit: types.Float64Value(100), ResetDuration: types.StringValue("12M")},
+	}
+	got := apiRespToBudgets([]bifrostclient.VKBudget{
+		{MaxLimit: 5, ResetDuration: "1d"},
+		{MaxLimit: 100, ResetDuration: "12M"},
+		{MaxLimit: 100, ResetDuration: "1M"},
+	}, prior)
+
+	var durations []string
+	for _, b := range got {
+		durations = append(durations, b.ResetDuration.ValueString())
+	}
+	if want := []string{"1M", "12M", "1d"}; !slices.Equal(durations, want) {
+		t.Errorf("got order %v, want %v", durations, want)
 	}
 }
 
