@@ -1,8 +1,10 @@
 package resources
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
@@ -594,15 +596,15 @@ func apiRespToBudgets(bs []bifrostclient.VKBudget, prior []VKBudgetModel) []VKBu
 		}
 		return []VKBudgetModel{}
 	}
-	priorByDuration := map[string]VKBudgetModel{}
-	for _, pb := range prior {
-		priorByDuration[pb.ResetDuration.ValueString()] = pb
+	priorIdx := make(map[string]int, len(prior))
+	for i, pb := range prior {
+		priorIdx[pb.ResetDuration.ValueString()] = i
 	}
 	out := make([]VKBudgetModel, 0, len(bs))
 	for _, b := range bs {
 		calAligned := types.BoolValue(false)
-		if pb, ok := priorByDuration[b.ResetDuration]; ok {
-			calAligned = pb.CalendarAligned
+		if i, ok := priorIdx[b.ResetDuration]; ok {
+			calAligned = prior[i].CalendarAligned
 		}
 		out = append(out, VKBudgetModel{
 			MaxLimit:        types.Float64Value(b.MaxLimit),
@@ -610,6 +612,15 @@ func apiRespToBudgets(bs []bifrostclient.VKBudget, prior []VKBudgetModel) []VKBu
 			CalendarAligned: calAligned,
 		})
 	}
+	rank := func(b VKBudgetModel) int {
+		if i, ok := priorIdx[b.ResetDuration.ValueString()]; ok {
+			return i
+		}
+		return len(prior)
+	}
+	slices.SortStableFunc(out, func(a, b VKBudgetModel) int {
+		return cmp.Compare(rank(a), rank(b))
+	})
 	return out
 }
 
