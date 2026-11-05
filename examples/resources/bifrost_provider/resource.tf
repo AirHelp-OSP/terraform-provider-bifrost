@@ -32,3 +32,20 @@ resource "bifrost_provider" "openai_custom" {
 resource "bifrost_provider" "cloudflare" {
   provider_name = "cloudflare"
 }
+
+# Custom provider on the local network (Bifrost v1.5.17+). Bifrost rejects RFC 1918
+# base URLs unless allow_private_network is set, which relaxes its SSRF protection —
+# use it only for trusted LAN endpoints.
+resource "bifrost_provider" "llm_on_lan" {
+  provider_name = "llm-on-lan"
+
+  custom_provider_config = {
+    base_provider_type = "openai"
+    is_key_less        = false
+  }
+
+  network_config = {
+    base_url              = "http://192.168.1.20:11434/v1"
+    allow_private_network = true
+  }
+}

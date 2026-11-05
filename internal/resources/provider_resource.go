@@ -74,6 +74,7 @@ type NetworkConfigModel struct {
 	RetryBackoffInitialMs          types.Int64  `tfsdk:"retry_backoff_initial_ms"`
 	RetryBackoffMaxMs              types.Int64  `tfsdk:"retry_backoff_max_ms"`
 	InsecureSkipVerify             types.Bool   `tfsdk:"insecure_skip_verify"`
+	AllowPrivateNetwork            types.Bool   `tfsdk:"allow_private_network"`
 	CACertPEM                      types.String `tfsdk:"ca_cert_pem"`
 }
 
@@ -197,6 +198,15 @@ func (r *ProviderResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 						Optional:            true,
 						Computed:            true,
 						Default:             booldefault.StaticBool(false),
+					},
+					"allow_private_network": schema.BoolAttribute{
+						MarkdownDescription: "Allow connections to RFC 1918 private IPs (LAN deployments). This relaxes Bifrost's SSRF " +
+							"protection, so use it only for trusted LAN endpoints. Link-local (169.254.0.0/16, fe80::/10) and " +
+							"unspecified addresses are always blocked. Requires Bifrost v1.5.17+. Defaults to `false`.",
+						Description: "Allow connections to RFC 1918 private IPs.",
+						Optional:    true,
+						Computed:    true,
+						Default:     booldefault.StaticBool(false),
 					},
 					"ca_cert_pem": schema.StringAttribute{
 						MarkdownDescription: "PEM-encoded CA certificate to trust. Bifrost redacts this on `GET`; the prior value is preserved on Read. " +
@@ -669,6 +679,7 @@ func networkConfigToModel(nc schemas.NetworkConfig, prior *ProviderResourceModel
 		RetryBackoffInitialMs:          types.Int64Value(nc.RetryBackoffInitial.Milliseconds()),
 		RetryBackoffMaxMs:              types.Int64Value(nc.RetryBackoffMax.Milliseconds()),
 		InsecureSkipVerify:             types.BoolValue(nc.InsecureSkipVerify),
+		AllowPrivateNetwork:            types.BoolValue(nc.AllowPrivateNetwork),
 	}
 
 	var priorCA types.String
@@ -708,6 +719,7 @@ func applyNetworkConfigModel(ctx context.Context, nc *schemas.NetworkConfig, m *
 	nc.DefaultRequestTimeoutInSeconds = int(m.DefaultRequestTimeoutInSeconds.ValueInt64())
 	nc.MaxRetries = int(m.MaxRetries.ValueInt64())
 	nc.InsecureSkipVerify = m.InsecureSkipVerify.ValueBool()
+	nc.AllowPrivateNetwork = m.AllowPrivateNetwork.ValueBool()
 	nc.CACertPEM = stringToEnvVar(m.CACertPEM)
 	if !m.RetryBackoffInitialMs.IsNull() && !m.RetryBackoffInitialMs.IsUnknown() {
 		nc.RetryBackoffInitial = time.Duration(m.RetryBackoffInitialMs.ValueInt64()) * time.Millisecond
@@ -733,6 +745,7 @@ func defaultNetworkConfigModel() *NetworkConfigModel {
 		RetryBackoffInitialMs:          types.Int64Value(defaultRetryBackoffInitialMs),
 		RetryBackoffMaxMs:              types.Int64Value(defaultRetryBackoffMaxMs),
 		InsecureSkipVerify:             types.BoolValue(false),
+		AllowPrivateNetwork:            types.BoolValue(false),
 		CACertPEM:                      types.StringNull(),
 	}
 }
