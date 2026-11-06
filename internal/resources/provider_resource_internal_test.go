@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/maximhq/bifrost/core/schemas"
 
 	bifrostclient "github.com/airhelp-osp/terraform-provider-bifrost/internal/client"
@@ -48,6 +49,39 @@ func TestNetworkConfigToModel_PopulatedBaseURLPassesThrough(t *testing.T) {
 	}
 }
 
+// TestAllowPrivateNetworkRoundTrip pins the feature inside the model layer:
+// a configured true is forwarded into the API request by
+// applyNetworkConfigModel and read back into state by networkConfigToModel.
+func TestAllowPrivateNetworkRoundTrip(t *testing.T) {
+	in := &NetworkConfigModel{
+		BaseURL:                        types.StringValue("http://192.168.0.10:8080/v1"),
+		ExtraHeaders:                   types.MapNull(types.StringType),
+		DefaultRequestTimeoutInSeconds: types.Int64Value(defaultRequestTimeoutSeconds),
+		MaxRetries:                     types.Int64Value(0),
+		RetryBackoffInitialMs:          types.Int64Value(defaultRetryBackoffInitialMs),
+		RetryBackoffMaxMs:              types.Int64Value(defaultRetryBackoffMaxMs),
+		InsecureSkipVerify:             types.BoolValue(false),
+		AllowPrivateNetwork:            types.BoolValue(true),
+		CACertPEM:                      types.StringNull(),
+	}
+
+	nc := schemas.NetworkConfig{}
+	if diags := applyNetworkConfigModel(context.Background(), &nc, in); diags.HasError() {
+		t.Fatalf("unexpected diagnostics: %v", diags)
+	}
+	if !nc.AllowPrivateNetwork {
+		t.Fatal("applyNetworkConfigModel must forward allow_private_network=true to the API request")
+	}
+
+	got := networkConfigToModel(nc, &ProviderResourceModel{})
+	if got.diags.HasError() {
+		t.Fatalf("unexpected diagnostics: %v", got.diags)
+	}
+	if !got.model.AllowPrivateNetwork.ValueBool() {
+		t.Error("networkConfigToModel must read allow_private_network=true back into state")
+	}
+}
+
 // TestModelToUpdateRequest_BlocksAlwaysSent guards the Bifrost v2.x update
 // contract: concurrency_and_buffer_size is required on every PUT and
 // network_config is replaced wholesale, so unmanaged blocks must echo the
@@ -69,6 +103,9 @@ func TestModelToUpdateRequest_BlocksAlwaysSent(t *testing.T) {
 	if unmanaged.NetworkConfig.BaseURL != current.NetworkConfig.BaseURL || unmanaged.ConcurrencyAndBufferSize.Concurrency != 10 {
 		t.Errorf("unmanaged blocks must echo server values, got %+v / %+v", *unmanaged.NetworkConfig, *unmanaged.ConcurrencyAndBufferSize)
 	}
+	if !unmanaged.NetworkConfig.AllowPrivateNetwork {
+		t.Error("unmanaged network_config must echo the server's allow_private_network")
+	}
 	if unmanaged.ProxyConfig != nil {
 		t.Errorf("unmanaged proxy_config must not be sent, got %+v", *unmanaged.ProxyConfig)
 	}
@@ -86,8 +123,8 @@ func TestModelToUpdateRequest_BlocksAlwaysSent(t *testing.T) {
 	if nc.BaseURL != "" || nc.DefaultRequestTimeoutInSeconds != defaultRequestTimeoutSeconds {
 		t.Errorf("removed network_config must reset managed fields, got %+v", *nc)
 	}
-	if !nc.AllowPrivateNetwork {
-		t.Error("removed network_config must keep settings this resource does not manage")
+	if nc.AllowPrivateNetwork {
+		t.Error("removed network_config must reset allow_private_network to the default false")
 	}
 	if removed.ConcurrencyAndBufferSize.Concurrency != defaultConcurrency {
 		t.Errorf("removed concurrency_and_buffer_size must reset to defaults, got %+v", *removed.ConcurrencyAndBufferSize)
